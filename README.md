@@ -1,6 +1,8 @@
 # dsh-serper-search
 
-[serper.dev](https://serper.dev)（Google Search API）搜索增强插件，接入 DeepSeek Harness 的 web 能力缝（`ctx.web`）。安装后，DSH 内置的 `web_search` 工具每次搜索**并行查询 serper.dev 和 DeepSeek 原生搜索**，两边结果按 URL 去重合并（Google 排名在前，answerBox 直接答案置于内容区），让模型拿到更全的参考资料。
+[serper.dev](https://serper.dev)（Google Search API）搜索增强插件，接入 DeepSeek Harness 的 web 能力缝（`ctx.web`）。安装后，DSH 内置的 `web_search` 工具每次搜索**并行查询 serper.dev 和 DeepSeek 原生搜索**，两边结果按 URL 去重后 **2:1 交错合并**（serper 的 Google 排名占前两位、原生独源占第三位，依此类推；answerBox 直接答案置于内容区），让模型拿到更全的参考资料。
+
+> 为什么交错而不是 serper 在前拼接：`web_search` 工具层每次调用只保留 8 条来源，实测（两个真实调研会话）拼接模式下原生来源被截断到 40 条里只剩 2 条；2:1 交错保证原生来源在截断后仍占约 1/3 席位。
 
 ## 工作原理
 
