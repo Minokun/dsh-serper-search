@@ -58,6 +58,47 @@
 
 合并模式取两者之长：serper 提供快速、排名好的 Google 结果和直接答案，原生搜索补充模型视角的多轮检索与贴题摘录。代价是每次 `web_search` 同时消耗 serper 次数和 DeepSeek token，延迟取两者较大值（≈原生搜索的延迟）。想省成本就把 `native` 关掉。
 
+## 费用与搜索纪律（重要，建议配合）
+
+每一次 `web_search` 调用都真实消耗 serper 额度（和开启合并时的模型 token）。消耗量 = **工具调用次数 × 每次的查询词数**——一次多角度调研轻松达到 15–20 次。两个真实调研会话的实测数据：
+
+- 查询词之间的 Google 结果重复率仅 3–7%（同义改写也几乎不重叠），所以**减少调用次数**才是省钱关键，而非去重
+- 每条查询 serper 固定 1 次额度（≈$0.0003–0.001）；原生半边每次是一整轮模型调用，token 成本远高于 serper
+
+推荐把下面的搜索纪律写进你的**全局** `~/.dsh/AGENTS.md`（对所有项目生效，不用每个项目重复写；项目级 `AGENTS.md` 是叠加层，放项目专属规则）：
+
+```markdown
+## 联网搜索（web_search）使用纪律
+
+每次 `web_search` 调用都会真实消耗外部 API 额度与模型 token，遵循以下约束：
+
+1. **一次调用尽量承载一个调研角度**：把该角度的查询词合并进一次调用（最多 4 个），不要为同义词改写拆成多次调用。
+2. **查询词之间必须有实质差异**（不同语言、不同平台、不同技术栈、不同子问题），禁止同一意思换措辞重发——实测同义改写的 Google 结果集重叠率不足 7%，属于纯浪费。
+3. **先规划后搜索**：动手前先想清楚需要哪几个角度，简单事实类问题只搜 1 次；只有用户明确要求"调研/深入研究"时才多角度多轮搜索。
+4. **够答就停**：已有来源足够回答时不再追加搜索；不要因为"再确认一下"而重复检索已覆盖的内容。
+```
+
+实测效果（写入前后各一次调研会话对比）：并行批量搜索（多角度同秒齐发）、每次调用查询词打满差异化上限，调研墙钟时间从 ~2.5 分钟降到 ~40 秒。
+
+## English
+
+**Merged web search for DeepSeek Harness**: one `ctx.web` provider that runs every `web_search` against serper.dev (Google SERP + answer box) and DeepSeek native web_search in parallel, interleaving the URL-deduped sources 2:1 so both backends survive the tool layer's 8-source cap. Degrades to whichever backend answers; `native: false` for serper-only. Settings card on the Plugins page (API key stored in the credentials domain, endpoint, gl/hl, result count, native-merge toggle).
+
+Install: `dsh plugin --profile web add dsh-serper-search`, add `SERPER_API_KEY` under `refs:` in `~/.dsh/.credentials.yaml` (or paste it into the Plugins-page card), restart `dsh web`.
+
+Cost discipline: every `web_search` call spends real serper credits (and model tokens when merging). One research session easily issues 15–20 queries (calls × queries per call). Measured result overlap between queries is only 3–7%, so the saving lever is FEWER queries, not dedup. Recommended global `~/.dsh/AGENTS.md` rule (applies to every project):
+
+```markdown
+## Web search (web_search) discipline
+
+Every web_search call spends real API credits and model tokens:
+
+1. One call per research angle — batch up to 4 queries into a single call; never split synonymous rephrasings into separate calls.
+2. Queries within one call must differ materially (language, platform, stack, sub-question); rephrasing the same question is pure waste (measured <7% Google result overlap).
+3. Plan before searching: one call for simple factual questions; multi-round searching only when the user asks for research.
+4. Stop when the sources suffice; never re-search just to "double-check".
+```
+
 ## 切回 DeepSeek 搜索
 
 在 profile 自己的 `cordis.patch.yml` 末尾加：
