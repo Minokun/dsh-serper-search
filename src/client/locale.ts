@@ -1,0 +1,63 @@
+/**
+ * Locale bundles for the serper search provider's settings card.
+ * @module dsh-serper-search/client/locale
+ */
+
+/** English copy. */
+export const en = {
+  title: 'Serper search',
+  description: 'Set up the serper.dev search provider; results merge with DeepSeek native search by default.',
+  apiKey: 'API key',
+  apiKeyHint: 'Stored outside the settings file. Leave blank to keep the current key.',
+  apiKeySet: 'A key is configured.',
+  apiKeyUnset: 'No key is configured; searches will fail until one is saved.',
+  baseUrl: 'Endpoint',
+  baseUrlHint: 'Leave blank to use the provider default (https://google.serper.dev).',
+  gl: 'Country (gl)',
+  glHint: 'Google country code, e.g. cn or us. Leave blank for the provider default.',
+  hl: 'Language (hl)',
+  hlHint: 'Interface language, e.g. zh-cn or en. Leave blank for the provider default.',
+  num: 'Results per search',
+  numHint: 'Default number of organic results per search (1-100).',
+  native: 'Merge DeepSeek native search',
+  nativeHint: 'true = every search also runs DeepSeek native web_search and merges its sources (wider coverage, slower, costs model tokens); false = serper only.',
+  overridden: 'Overridden',
+  reset: 'Reset to default',
+  readOnly: 'This deployment stores settings read-only.',
+  unavailable: 'This plugin is not loaded, so it cannot be configured right now.',
+  save: 'Save',
+  saving: 'Saving…',
+  saveFailed: 'The deployment did not accept these values; they were left for you to correct.',
+  invalidNumber: 'Enter a number, or leave blank to use the default.',
+} as const
+
+/** Simplified Chinese copy. */
+export const zh: Record<keyof typeof en, string> = {
+  title: 'Serper 搜索',
+  description: '设置 serper.dev 搜索提供方；默认与 DeepSeek 原生搜索合并结果。',
+  apiKey: 'API Key',
+  apiKeyHint: '不写入设置文件。留空表示保持当前密钥。',
+  apiKeySet: '已配置密钥。',
+  apiKeyUnset: '未配置密钥；保存一个密钥后才能搜索。',
+  baseUrl: '接口地址',
+  baseUrlHint: '留空则使用提供方默认地址（https://google.serper.dev）。',
+  gl: '国家/地区（gl）',
+  glHint: 'Google 国家/地区码，如 cn 或 us。留空则使用提供方默认值。',
+  hl: '语言（hl）',
+  hlHint: '界面语言，如 zh-cn 或 en。留空则使用提供方默认值。',
+  num: '每次搜索结果数',
+  numHint: '每次搜索返回的自然结果条数（1-100）。',
+  native: '合并 DeepSeek 原生搜索',
+  nativeHint: 'true = 每次搜索同时跑 DeepSeek 原生 web_search 并合并来源（覆盖更全，但更慢且消耗模型 token）；false = 仅 serper。',
+  overridden: '已覆盖',
+  reset: '恢复默认',
+  readOnly: '本部署的设置为只读。',
+  unavailable: '该插件当前未加载，暂时无法配置。',
+  save: '保存',
+  saving: '保存中…',
+  saveFailed: '本部署没有接受这些值，已保留供你修改。',
+  invalidNumber: '请填数字；留空表示使用默认值。',
+}
+
+/** Dictionary key union owned by this plugin. */
+export type SerperSearchLocaleKey = keyof typeof en

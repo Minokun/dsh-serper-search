@@ -1,0 +1,7 @@
+node_modules/
+lib/client.js
+lib/client.js.map
+.gstack/
+*.log
+.DS_Store
+*recovery*

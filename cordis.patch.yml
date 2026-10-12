@@ -1,0 +1,30 @@
+# The dsh-serper-search bundle patch: mounts the serper.dev search provider
+# alongside the profile's bundles and points the web seam at it.
+#
+# The `web` row's whole `config` is replaced (patch semantics), so
+# `fetchProvider: http` from dsh-base is restated here. To switch search back
+# to DeepSeek native search, set `searchProvider: deepseek-official` in the
+# profile's own cordis.patch.yml (it applies after every bundle) or remove
+# this bundle from the profile's package.json.
+#
+# API key: stored outside config — add `SERPER_API_KEY: <key>` under `refs:`
+# in ~/.dsh/.credentials.yaml (or export SERPER_API_KEY in the launching
+# environment). A literal key also works:
+#
+# - insert:
+#     - id: web-search-serper
+#       name: 'dsh-serper-search'
+#       config:
+#         apiKey: <key>        # not recommended; prefer the credentials ref
+#         gl: cn               # country code
+#         hl: zh-cn            # interface language
+#         num: 10              # default result count per search
+
+- insert:
+    - id: web-search-serper
+      name: 'dsh-serper-search'
+
+- id: web
+  config:
+    searchProvider: serper
+    fetchProvider: http

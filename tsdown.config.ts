@@ -1,0 +1,59 @@
+/**
+ * Build for the browser half of the plugin. The Host half (lib/index.js) is
+ * hand-written plain ESM and not built here. The browser half replicates the
+ * deepseek-harness client-bundle contract: a closure-factory CJS artifact that
+ * hands itself to window.__ModuleLoader__.load({ id, factory }) and resolves
+ * the platform modules through the injected require. Anything outside the
+ * platform list is inlined — a require the frozen module table cannot answer
+ * is a runtime throw.
+ */
+import { defineConfig } from 'tsdown'
+
+/** The shell-seeded module specifiers (dsh-web-frontend platform seeds as of dsh 0.1.2-alpha.1). */
+const CLIENT_EXTERNALS: readonly string[] = [
+  'react',
+  'react/jsx-runtime',
+  'react-dom',
+  'react-dom/client',
+  '@deepseek-ai/cordis',
+  '@deepseek-ai/dsh-client-store',
+  '@deepseek-ai/dsh-client-ui-slots',
+  '@deepseek-ai/dsh-client-ui-primitives',
+]
+
+const PACKAGE_ID = 'dsh-serper-search'
+
+/**
+ * The client bundle must self-register under the SAME name the host package
+ * is mounted as: the boot-graph row id equals the package name client-modules
+ * resolves the bundle through, and the browser loader rejects a bundle that
+ * registers any other id ("loaded without registering"). Enforced by
+ * scripts/check-client-id.mjs.
+ */
+const CLIENT_ID = PACKAGE_ID
+
+export default defineConfig([
+  {
+    name: `${PACKAGE_ID}/client`,
+    entry: { client: 'src/client/index.ts' },
+    outDir: 'lib',
+    format: 'cjs',
+    platform: 'browser',
+    dts: false,
+    sourcemap: true,
+    clean: false,
+    external: [...CLIENT_EXTERNALS],
+    define: {
+      'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
+      'import.meta.env.MODE': JSON.stringify(process.env.NODE_ENV ?? 'production'),
+      'import.meta.env': JSON.stringify({ MODE: process.env.NODE_ENV ?? 'production' }),
+    },
+    noExternal: (id: string) => (CLIENT_EXTERNALS.includes(id) ? undefined : true),
+    outputOptions: {
+      entryFileNames: 'client.js',
+      banner: `window.__ModuleLoader__.load({ id: ${JSON.stringify(CLIENT_ID)}, factory: (require) => {`,
+      footer: 'return module.exports; } });',
+      intro: 'var module = { exports: {} }; var exports = module.exports;',
+    },
+  },
+])

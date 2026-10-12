@@ -1,0 +1,64 @@
+{
+  "name": "dsh-serper-search",
+  "version": "0.2.0",
+  "description": "Merged web search for the DeepSeek Harness: serper.dev (Google Search API) results unioned with DeepSeek native web_search, registered as one provider on the ctx.web seam so the built-in web_search tool serves both at once.",
+  "license": "MIT",
+  "author": "Minokun",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Minokun/dsh-serper-search.git"
+  },
+  "homepage": "https://github.com/Minokun/dsh-serper-search#readme",
+  "bugs": "https://github.com/Minokun/dsh-serper-search/issues",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-plugin-manager",
+        "@deepseek-ai/dsh-api-remotes"
+      ],
+      "immediately": true
+    }
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown && node scripts/check-client-id.mjs",
+    "dev": "tsdown --watch",
+    "release": "sh scripts/release.sh"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "serper",
+    "web-search"
+  ],
+  "packageManager": "pnpm@11.7.0+sha512.9b7fdd1577a1b99015ea3c3f53b96d072d99c8e035e5e0209b350b3c6e99b4e9668b8b48eb2b0f4b6b2b2c1c1b98c97d42d3e9d0e70e6b0b163b1e6fd0e2b7b1",
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@types/react": "~18.3.1",
+    "react": "^18.2.0",
+    "tsdown": "0.22.2",
+    "typescript": "6.0.3"
+  }
+}
