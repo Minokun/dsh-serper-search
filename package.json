@@ -44,7 +44,10 @@
   ],
   "scripts": {
     "build": "tsdown && node scripts/check-client-id.mjs",
+    "prepare": "tsdown",
     "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit",
+    "link-harness": "sh scripts/link-harness.sh",
     "release": "sh scripts/release.sh"
   },
   "keywords": [

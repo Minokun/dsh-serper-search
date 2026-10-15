@@ -160,7 +160,7 @@ export function SerperSearchCard(props: SerperSearchCardProps): ReactNode {
         hint={t('nativeHint')}
         overriddenLabel={t('overridden')}
         resetLabel={t('reset')}
-        invalidLabel={t('invalidNumber')}
+        invalidLabel={t('invalidBoolean')}
         placeholder="true"
         disabled={disabled}
         {...state.native}

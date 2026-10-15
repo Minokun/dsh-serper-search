@@ -29,6 +29,7 @@ export const en = {
   saving: 'Saving…',
   saveFailed: 'The deployment did not accept these values; they were left for you to correct.',
   invalidNumber: 'Enter a number, or leave blank to use the default.',
+  invalidBoolean: 'Enter true or false, or leave blank to use the default.',
 } as const
 
 /** Simplified Chinese copy. */
@@ -57,6 +58,7 @@ export const zh: Record<keyof typeof en, string> = {
   saving: '保存中…',
   saveFailed: '本部署没有接受这些值，已保留供你修改。',
   invalidNumber: '请填数字；留空表示使用默认值。',
+  invalidBoolean: '请填 true 或 false；留空表示使用默认值。',
 }
 
 /** Dictionary key union owned by this plugin. */

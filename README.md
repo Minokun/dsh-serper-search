@@ -15,15 +15,17 @@
 
 ## 安装
 
-1. 存 key（serper 三选一，推荐第一种；也可装好后再到 GUI 里填，见下）：
+```sh
+dsh plugin --profile web add dsh-serper-search
+```
+
+或打开 **设置 → 插件市场**，搜索 `dsh-serper-search` 一键安装。
+
+1. 配置 serper API key（三选一，推荐第一种或装好后在 GUI 设置卡片里直接填）：
    - 在 `~/.dsh/.credentials.yaml` 的 `refs:` 下加一行 `SERPER_API_KEY: <你的key>`
    - 启动环境里 `export SERPER_API_KEY=<key>`
    - 在 profile 的 `cordis.patch.yml` 里给 `web-search-serper` 条目加 `config.apiKey`（明文，不推荐）
-2. profile（如 `~/.dsh/profiles/web`）的 `package.json`：
-   - `dsh.profile.bundles` 数组末尾加 `"dsh-serper-search"`
-   - `dependencies` 加 `"dsh-serper-search": "link:<本仓库路径>"`
-   - 在 profile 目录跑 `pnpm install`
-3. 重启 `dsh web`（bundle 列表与模块代码变化都不会热加载），浏览器刷新页面
+2. 重启 `dsh web`，浏览器刷新页面即可生效。
 
 ## GUI 设置页
 
@@ -111,3 +113,13 @@ Every web_search call spends real API credits and model tokens:
 ```
 
 或直接从 `bundles` 移除本包。
+
+## 开发
+
+```sh
+pnpm install
+pnpm link-harness # 把类型/依赖对齐到本机已安装的 dsh
+pnpm build        # 构建 client，含 client-id 一致性门禁
+pnpm typecheck
+```
+
