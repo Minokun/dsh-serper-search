@@ -1,4 +1,4 @@
-# npm Trusted Publishing: tag-push releases via GitHub Actions OIDC.
+# npm Trusted Publishing: releases via GitHub Actions OIDC on main push or v* tag push.
 #
 # One-time binding (npmjs.com → package dsh-serper-search → Settings →
 # Trusted Publisher → GitHub Actions):
@@ -7,12 +7,14 @@
 #   Workflow filename:    publish.yml
 #   Allowed actions:      npm publish
 #
-# Release flow: `npm version patch && git push --follow-tags` (or
-# scripts/release.sh) — this workflow builds and publishes; no token, no OTP.
+# Release flow: either bump version in package.json and `git push`, or run
+# `sh scripts/release.sh` — this workflow builds and publishes; no token, no OTP.
 name: publish
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
 
@@ -27,38 +29,63 @@ jobs:
         with:
           fetch-depth: 0 # full history + tags for the release-notes commit range
 
+      - name: Check if version is already published
+        id: check
+        run: |
+          PKG_VER=$(node -p "require('./package.json').version")
+          NPM_VER=$(npm view dsh-serper-search version 2>/dev/null || echo "")
+          echo "version=$PKG_VER" >> "$GITHUB_OUTPUT"
+          echo "tag=v$PKG_VER" >> "$GITHUB_OUTPUT"
+          if [ "$PKG_VER" = "$NPM_VER" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "dsh-serper-search@$PKG_VER is already published on npm — skipping."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: pnpm/action-setup@v4 # reads packageManager from package.json
+        if: steps.check.outputs.skip != 'true'
 
       - uses: actions/setup-node@v4
+        if: steps.check.outputs.skip != 'true'
         with:
           node-version: 22
           cache: pnpm
 
       # Trusted publishing requires npm CLI >= 11.5.1.
       - name: Latest npm CLI
+        if: steps.check.outputs.skip != 'true'
         run: npm install -g npm@latest
 
       - run: pnpm install --frozen-lockfile
+        if: steps.check.outputs.skip != 'true'
 
       # tsdown client build, including the client-id consistency gate.
       - run: pnpm build
+        if: steps.check.outputs.skip != 'true'
 
       # OIDC is auto-detected in GitHub Actions; provenance is generated
       # automatically for trusted publishes. No token/OTP needed.
       - run: npm publish --access public
+        if: steps.check.outputs.skip != 'true'
 
-      # GitHub Release with notes from the commit subjects since the previous
-      # tag (--generate-notes stays empty for direct-push repos without PRs).
-      # Runs after the npm publish so a failed publish never leaves a release
-      # pointing at nothing.
+      # Ensure git tag exists and create GitHub Release with notes from the
+      # commit subjects since the previous tag.
       - name: GitHub Release
+        if: steps.check.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.check.outputs.tag }}
         run: |
-          prev=$(git tag --sort=-v:refname | grep -vx "$TAG" | head -1 || true)
-          range=${prev:+$prev..}$TAG
-          notes=$(git log --format='- %s' "$range" | grep -vE '^- [0-9]+\.[0-9]+\.[0-9]+$' || true)
-          gh release create "$TAG" --verify-tag --title "$TAG" --notes "$notes
+          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            prev=$(git tag --sort=-v:refname | grep -vx "$TAG" | head -1 || true)
+            range=${prev:+$prev..}$TAG
+            notes=$(git log --format='- %s' "$range" | grep -vE '^- [0-9]+\.[0-9]+\.[0-9]+$' || true)
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes "$notes
 
           **Full Changelog**: https://github.com/${{ github.repository }}/compare/${prev}...${TAG}"
+          fi
