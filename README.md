@@ -105,6 +105,29 @@ DSH 0.2.1+ 自带 `deepseek-search-api`（官方 Search API 单飞）与 `deepse
 
 本插件的价值仅在「**官方 + Google 双索引互补**」：默认 8 条来源中 6 条来自官方、2 条来自 Google，质量抽样与纯官方持平（1.792 vs 1.792，见 `../research/03-bench.md`），但多出 2 个 Google 独家源。若把本插件从 profile 移除，记得删掉指向 `serper` 的 `searchProvider` 覆盖。
 
+## 与内置搜索 provider 共存（不需要关闭任何东西）
+
+DSH 的 `ctx.web` 是「多 provider 注册、按配置选一个」。内置的 `deepseek-official`（原生 Messages 搜索）与 `deepseek-search-api`（官方 Search API）**即使不卸载也只是注册在 seam 里，不参与选路**——不会被调用、不产生费用、也不与本插件冲突。所以安装本插件后：
+
+- **不需要**卸载或禁用 `@deepseek-ai/dsh-web-search-deepseek` / `dsh-web-deepseek-api`（关掉反而会让 GUI 的网页搜索设置页/切换逻辑指向不存在的 id，报 `WEB_PROVIDER_CONFIGURED_MISSING`）；
+- **必须保留** `@deepseek-ai/dsh-tool-web`：`web_search` / `web_fetch` 工具本体在那里，本插件只提供搜索源，关掉就没有可调用的工具了；
+- `fetchProvider` 保持默认 `http` 即可（本插件不提供抓取；官方 Fetch API 的 Markdown 带反斜杠转义，DSH 内置 fetch provider 不做反转义）；
+- 唯一要避免的是 GUI「插件 → 内置插件配置 → 网页搜索」里的**「启用新版 Web 搜索 API」开关**——它写入用户级覆盖、优先级高于 bundle 的 pin：打开会切到 `deepseek-search-api`，关掉会切到 `deepseek-official`，**都回不到 `serper`**。要切回本插件，只能在 profile patch 里显式写：
+
+```yaml
+- id: web
+  config:
+    searchProvider: serper
+    fetchProvider: http
+```
+
+检查当前选中谁：
+
+```sh
+dsh --profile web --dump-config | grep -A3 "^- id: web$"
+# 看到 searchProvider: serper 即本插件生效
+```
+
 ## 来源条数上限（8 → 12/N，为什么不在插件里）
 
 `web_search` 一次调用最终保留几条来源，由工具层 `@deepseek-ai/dsh-tool-web` 的 `searchMaxResults` 决定（默认 **8**），而 `tool-web` 是挂在 **agent preset**（默认 `standard`）里的，**不在本插件配置里**——插件只按工具层传入的 `maxResults` 返回结果，无法自行突破。
@@ -206,6 +229,8 @@ Install: `dsh plugin --profile web add dsh-serper-search`, add `SERPER_API_KEY` 
   config:
     serperTimeoutMs: 10000
 ```
+
+**You do not need to disable or uninstall the built-in search providers.** `ctx.web` registers many providers and uses the one pinned by `searchProvider`; the built-in `deepseek-official` / `deepseek-search-api` providers stay mounted but idle (no calls, no cost). Keep `@deepseek-ai/dsh-tool-web` installed (it owns the `web_search` / `web_fetch` tools) and leave `fetchProvider: http`. The one thing to avoid is the GUI "Use the new Web Search API" switch: it writes a user-level override that outranks the bundle pin (on → `deepseek-search-api`, off → `deepseek-official`; neither returns to `serper`), so pin `searchProvider: serper` in the profile patch instead.
 
 Restart `dsh web`. The GUI card keeps the six basic controls; advanced settings (`ratio`, `primary`, `summaryMaxChars`, timeouts, `autoLocale`, `minAuthority`, `maxRetries`) are patched through `cordis.patch.yml`. The per-search source cap (default 8) belongs to `dsh-tool-web.searchMaxResults` inside the agent preset, not to this plugin; `scripts/sync-dsh-preset-cap.mjs 12` regenerates the `preset-standard` override block that raises it to 12 (restart + new session required; API cost is per request, so the cap only changes context tokens).
 
