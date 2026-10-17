@@ -85,7 +85,7 @@ export function SerperSearchCard(props: SerperSearchCardProps): ReactNode {
         text={state.apiKey.text}
         configured={state.apiKeyConfigured}
         stateLabel={state.apiKeyConfigured ? t('apiKeySet') : t('apiKeyUnset')}
-        onEdit={(text) => {
+        onEdit={(text: string) => {
           props.edit('apiKey', text)
         }}
       />
@@ -98,7 +98,7 @@ export function SerperSearchCard(props: SerperSearchCardProps): ReactNode {
         invalidLabel={t('invalidNumber')}
         disabled={disabled}
         {...state.baseURL}
-        onEdit={(text) => {
+        onEdit={(text: string) => {
           props.edit('baseURL', text)
         }}
         onReset={() => {
@@ -114,7 +114,7 @@ export function SerperSearchCard(props: SerperSearchCardProps): ReactNode {
         invalidLabel={t('invalidNumber')}
         disabled={disabled}
         {...state.gl}
-        onEdit={(text) => {
+        onEdit={(text: string) => {
           props.edit('gl', text)
         }}
         onReset={() => {
@@ -130,7 +130,7 @@ export function SerperSearchCard(props: SerperSearchCardProps): ReactNode {
         invalidLabel={t('invalidNumber')}
         disabled={disabled}
         {...state.hl}
-        onEdit={(text) => {
+        onEdit={(text: string) => {
           props.edit('hl', text)
         }}
         onReset={() => {
@@ -147,7 +147,7 @@ export function SerperSearchCard(props: SerperSearchCardProps): ReactNode {
         numeric
         disabled={disabled}
         {...state.num}
-        onEdit={(text) => {
+        onEdit={(text: string) => {
           props.edit('num', text)
         }}
         onReset={() => {
@@ -164,7 +164,7 @@ export function SerperSearchCard(props: SerperSearchCardProps): ReactNode {
         placeholder="true"
         disabled={disabled}
         {...state.native}
-        onEdit={(text) => {
+        onEdit={(text: string) => {
           props.edit('native', text)
         }}
         onReset={() => {

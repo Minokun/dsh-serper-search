@@ -1,17 +1,24 @@
 # dsh-serper-search
 
-[serper.dev](https://serper.dev)（Google Search API）搜索增强插件，接入 DeepSeek Harness 的 web 能力缝（`ctx.web`）。安装后，DSH 内置的 `web_search` 工具每次搜索**并行查询 serper.dev 和 DeepSeek 原生搜索**，两边结果按 URL 去重后 **2:1 交错合并**（serper 的 Google 排名占前两位、原生独源占第三位，依此类推；answerBox 直接答案置于内容区），让模型拿到更全的参考资料。
+DeepSeek **Search API**（官方自研搜索引擎）+ [serper.dev](https://serper.dev)（Google 搜索）双擎互补的搜索插件，接入 DeepSeek Harness 的 web 能力缝（`ctx.web`）。安装后，DSH 内置的 `web_search` 每次只发两次直连检索请求（无辅助模型调用），结果按 URL 去重后以 **固定比例交错**（默认 2:1）合并，让模型同时拿到 DeepSeek 自有索引与 Google 索引。
 
-> 为什么交错而不是 serper 在前拼接：`web_search` 工具层每次调用只保留 8 条来源，实测（两个真实调研会话）拼接模式下原生来源被截断到 40 条里只剩 2 条；2:1 交错保证原生来源在截断后仍占约 1/3 席位。
+> 为什么互补：实测同一组 query 下，DeepSeek Search API 与 Google 的结果 URL 重叠仅 **1.3%**（同后端重复调用噪声地板 43%–100%，故为真实索引差异）。DeepSeek 侧更快、更贴中文，Google 侧覆盖面更广，两者互补而不互相替代。
+>
+> v3 不再调用 DeepSeek 原生 Messages 搜索（旧版那一半每次要一整轮模型调用 5.3s / 0.019 元，且返回的是无摘要裸链接）。
 
 ## 工作原理
 
-- 注册一个 id 为 `serper` 的复合 `WebSearchProvider`，内部两路后端：
-  - **serper.dev**：POST `${baseURL}/search`，请求头 `X-API-KEY`，body `{q, gl, hl, num}`，`organic[]` → 来源，`answerBox` → 直接答案
-  - **DeepSeek 原生搜索**：复用 `@deepseek-ai/dsh-web-search-deepseek` 的 provider（Anthropic Messages + 服务端 `web_search` 工具），key 走现有的 `DEEPSEEK_API_KEY` credential
-- **降级**：任何一路失败/未配 key，另一路照常回答；两路都失败才报错。`native: false` 可关掉原生半边，纯 serper
-- bundle 补丁把 `web` seam 的 `searchProvider` 固定为 `serper`（保留 `fetchProvider: http`，不影响 `web_fetch`）
-- API key 每次搜索时解析：literal 配置 → credentials 域（`~/.dsh/.credentials.yaml` 的 `refs:`）→ 启动环境变量
+- 注册一个 id 为 `serper` 的复合 `WebSearchProvider`（id 保持兼容，现有 profile 无需改配置），内部两路**直连 HTTP**后端并行：
+  - **DeepSeek Search API（主路）**：`POST ${deepseekBaseURL}/search`（默认 `https://api.deepseek.com/v1/tools/search`），鉴权为 `Authorization: Bearer <DEEPSEEK_API_KEY>`；若是 DeepSeek Account 路由会话则改发 `x-dsh-auth-token`（与 DSH 内置 provider 一致）；
+  - **serper.dev（副路）**：`POST ${baseURL}/search`，请求头 `X-API-KEY`，body `{q, gl, hl, num}`；`answerBox` 直接答案映射为结果级 `content`。
+- 映射增强：
+  - 官方 `summary`（实测均长 1893 字符）折叠空白后截断到 `summaryMaxChars`（默认 600）写入 `snippet`，把官方内置插件丢弃的长摘要捡回来；设 `0` 则回退原始短 snippet（231 字符）；
+  - 官方 `date` → `publishedAt`；serper 中文日期（`2026年8月13日`）→ ISO；
+  - 官方 `authority` 支持 `minAuthority` 过滤（保留 `-1` 未知站点）；
+  - 纯英文/代码 query（`autoLocale` 默认开启、`gl=cn` 时）自动切到 `gl=us, hl=en`：实测英文 query 延迟从 3.6–10.5s 降到 1.0–1.7s。
+- 合并：按归一化 URL 去重（去 fragment / `utm_*` / `spm_*` / 百度百科等追踪参数；`chapter`、`channel`、`from=20` 等业务参数不误删）→ 按固定比例模式交错 → 截到 `maxResults`（工具层默认 8）→ 返回 `truncated: false`（避免工具给模型追加 "Refine the query for more" 诱导重搜的尾注）。
+- 降级：任一路失败/超时/缺 key，另一路独立成答；两路都失败才报错。每路独立超时（官方 5000ms / serper 4500ms），官方 429/5xx 有 1s→2s 指数退避重试。
+- 比例档位（8 槽位最终构成）：`4 → 7主+1补`、`3 → 6+2`、`2 → 6+2`（默认）、`1.5 → 5+3`、`1 → 4+4`，可在 patch 里配置。
 
 ## 安装
 
@@ -21,105 +28,117 @@ dsh plugin --profile web add dsh-serper-search
 
 或打开 **设置 → 插件市场**，搜索 `dsh-serper-search` 一键安装。
 
-1. 配置 serper API key（三选一，推荐第一种或装好后在 GUI 设置卡片里直接填）：
-   - 在 `~/.dsh/.credentials.yaml` 的 `refs:` 下加一行 `SERPER_API_KEY: <你的key>`
-   - 启动环境里 `export SERPER_API_KEY=<key>`
-   - 在 profile 的 `cordis.patch.yml` 里给 `web-search-serper` 条目加 `config.apiKey`（明文，不推荐）
+1. 配置两个 key（推荐 credentials 域，GUI 卡片也可填 serper key）：
+   - `~/.dsh/.credentials.yaml` 的 `refs:` 下加 `SERPER_API_KEY: <serper key>` 与 `DEEPSEEK_API_KEY: <deepseek key>`（后者通常已有）；
+   - 或启动环境变量 `SERPER_API_KEY` / `DEEPSEEK_API_KEY`。
 2. 重启 `dsh web`，浏览器刷新页面即可生效。
 
 ## GUI 设置页
 
-重启后打开 **Plugins → dsh-serper-search** bundle 详情页：页面正文中就是设置表单（`plugins.bundle.config`），行条目 `web-search-serper` 上也有"配置"入口（`plugins.row.config`）。字段：API key（写入 credentials 域，不落设置文件）、接口地址、gl、hl、每次搜索结果数、是否合并 DeepSeek 原生搜索。保存即生效（volatile 配置，不重启）。
+**Plugins → dsh-serper-search** bundle 详情页提供基础配置：serper API key（写入 credentials 域，不落设置文件）、接口地址、`gl`、`hl`、每次结果数、是否合并 DeepSeek Search API（`native`）。
+
+`ratio`、`primary`、`summaryMaxChars`、`*TimeoutMs`、`autoLocale`、`minAuthority`、`maxRetries` 等**高级项不进 GUI**，通过 profile 的 `cordis.patch.yml` 覆盖：
+
+```yaml
+- id: web-search-serper
+  config:
+    ratio: 1.5            # 5 主 + 3 补（默认 2 = 6 主 + 2 补）
+    summaryMaxChars: 800  # 官方长摘要注入 budget；0 = 关闭
+    autoLocale: true      # 纯英文 query 自动 gl=us/hl=en
+    primary: deepseek     # 或 serper
+    serperTimeoutMs: 4500
+```
 
 ## 配置项（settings 命名空间 `web-search-serper`）
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
-| `apiKey` | — | serper 明文 key（volatile secret，优先于 credentials） |
+| `apiKey` | — | serper 明文 key（volatile，优先于 credentials） |
 | `apiKeyEnv` | `SERPER_API_KEY` | serper key 的 credentials 引用名 |
-| `baseURL` | `https://google.serper.dev` | 也可用环境变量 `SERPER_BASE_URL` 覆盖 |
-| `gl` | `cn` | Google 国家/地区码 |
-| `hl` | `zh-cn` | 界面语言 |
-| `num` | `10` | serper 每次搜索默认结果数（1–100；工具层的 `maxResults` 优先） |
-| `native` | `true` | 是否合并 DeepSeek 原生搜索结果（GUI 里填 `true`/`false`） |
-| `nativeApiKey` / `nativeApiKeyEnv` | — / `DEEPSEEK_API_KEY` | 原生搜索的 key（一般用现有的 DEEPSEEK_API_KEY 即可） |
-| `nativeBaseURL` | `https://api.deepseek.com/anthropic/v1` | 也可用 `DEEPSEEK_SEARCH_BASE_URL` 覆盖 |
-| `nativeModel` | `deepseek-v4-flash` | 原生搜索用的模型 |
-| `nativeMaxUses` | `5` | 原生搜索单次请求最多检索次数 |
+| `baseURL` | `https://google.serper.dev` | 也可用环境变量 `SERPER_BASE_URL` |
+| `gl` / `hl` | `cn` / `zh-cn` | Google 国家/地区与界面语言 |
+| `autoLocale` | `true` | 纯英文 query 自动切 `gl=us, hl=en` |
+| `num` | `10` | serper 每次请求条数下限（1–100） |
+| `serperTimeoutMs` | `4500` | serper 单路超时（冷态折中值） |
+| `deepseekApiKey` / `deepseekApiKeyEnv` | — / `DEEPSEEK_API_KEY` | 官方 API key 或凭据引用 |
+| `deepseekBaseURL` | `https://api.deepseek.com/v1/tools` | 可用 `DEEPSEEK_SEARCH_API_BASE_URL` 覆盖 |
+| `deepseekCount` | `10` | 官方每次请求条数下限（1–50） |
+| `deepseekTimeoutMs` | `5000` | 官方单路超时 |
+| `summaryMaxChars` | `600` | 官方 `summary` 注入 `snippet` 的最大字符数；`0` 关闭 |
+| `primary` | `deepseek` | 主导路（决定交错前排与去重保留优先级） |
+| `ratio` | `2` | 槽位比例，五档白名单 `1 / 1.5 / 2 / 3 / 4` |
+| `minAuthority` | `-1` | 官方结果 authority 下限（`-1` 不过滤） |
+| `maxRetries` | `1` | 官方 429/5xx 重试次数 |
+| `logLevel` | `summary` | `off` / `summary` / `verbose` |
+| `native` | `true` | 兼容字段：v3 中含义为「是否合并 DeepSeek Search API」；`false` = 纯 serper |
+| `nativeApiKey` / `nativeApiKeyEnv` / `nativeBaseURL` / `nativeModel` / `nativeMaxUses` | — | v0.2.x 兼容保留：新字段未配置时 key 作为 fallback，其余运行时忽略 |
 
-## 两种搜索后端对比
+## 与 DSH 内置官方 provider 的关系
 
-| | DeepSeek 原生搜索 | serper.dev |
-|---|---|---|
-| 原理 | 一轮完整模型调用 + 服务端 web_search 工具 | Google SERP 的结构化 API 代理 |
-| 速度 | 慢（5–15s，一次模型往返） | 快（1–3s，纯检索） |
-| 成本 | 模型 token（输入+输出） | 按次（注册送 2500 次，之后约 $1/1000 次） |
-| 查询能力 | 模型自主改写/分解问题、多次检索（maxUses） | 单次单查询 |
-| 结果形态 | 引用带贴近问题的摘录（cited_text）、page_age | Google 排名 + snippet + answerBox 直接答案 |
-| 可控性 | 黑盒（检索源和排序不可调） | gl/hl/num 等参数明确 |
-
-合并模式取两者之长：serper 提供快速、排名好的 Google 结果和直接答案，原生搜索补充模型视角的多轮检索与贴题摘录。代价是每次 `web_search` 同时消耗 serper 次数和 DeepSeek token，延迟取两者较大值（≈原生搜索的延迟）。想省成本就把 `native` 关掉。
-
-## 费用与搜索纪律（重要，建议配合）
-
-每一次 `web_search` 调用都真实消耗 serper 额度（和开启合并时的模型 token）。消耗量 = **工具调用次数 × 每次的查询词数**——一次多角度调研轻松达到 15–20 次。两个真实调研会话的实测数据：
-
-- 查询词之间的 Google 结果重复率仅 3–7%（同义改写也几乎不重叠），所以**减少调用次数**才是省钱关键，而非去重
-- 每条查询 serper 固定 1 次额度（≈$0.0003–0.001）；原生半边每次是一整轮模型调用，token 成本远高于 serper
-
-推荐把下面的搜索纪律写进你的**全局** `~/.dsh/AGENTS.md`（对所有项目生效，不用每个项目重复写；项目级 `AGENTS.md` 是叠加层，放项目专属规则）：
-
-```markdown
-## 联网搜索（web_search）使用纪律
-
-每次 `web_search` 调用都会真实消耗外部 API 额度与模型 token，遵循以下约束：
-
-1. **一次调用尽量承载一个调研角度**：把该角度的查询词合并进一次调用（最多 4 个），不要为同义词改写拆成多次调用。
-2. **查询词之间必须有实质差异**（不同语言、不同平台、不同技术栈、不同子问题），禁止同一意思换措辞重发——实测同义改写的 Google 结果集重叠率不足 7%，属于纯浪费。
-3. **先规划后搜索**：动手前先想清楚需要哪几个角度，简单事实类问题只搜 1 次；只有用户明确要求"调研/深入研究"时才多角度多轮搜索。
-4. **够答就停**：已有来源足够回答时不再追加搜索；不要因为"再确认一下"而重复检索已覆盖的内容。
-```
-
-实测效果（写入前后各一次调研会话对比）：并行批量搜索（多角度同秒齐发）、每次调用查询词打满差异化上限，调研墙钟时间从 ~2.5 分钟降到 ~40 秒。
-
-## English
-
-**Merged web search for DeepSeek Harness**: one `ctx.web` provider that runs every `web_search` against serper.dev (Google SERP + answer box) and DeepSeek native web_search in parallel, interleaving the URL-deduped sources 2:1 so both backends survive the tool layer's 8-source cap. Degrades to whichever backend answers; `native: false` for serper-only. Settings card on the Plugins page (API key stored in the credentials domain, endpoint, gl/hl, result count, native-merge toggle).
-
-Install: `dsh plugin --profile web add dsh-serper-search`, add `SERPER_API_KEY` under `refs:` in `~/.dsh/.credentials.yaml` (or paste it into the Plugins-page card), restart `dsh web`.
-
-Cost discipline: every `web_search` call spends real serper credits (and model tokens when merging). One research session easily issues 15–20 queries (calls × queries per call). Measured result overlap between queries is only 3–7%, so the saving lever is FEWER queries, not dedup. Recommended global `~/.dsh/AGENTS.md` rule (applies to every project):
-
-```markdown
-## Web search (web_search) discipline
-
-Every web_search call spends real API credits and model tokens:
-
-1. One call per research angle — batch up to 4 queries into a single call; never split synonymous rephrasings into separate calls.
-2. Queries within one call must differ materially (language, platform, stack, sub-question); rephrasing the same question is pure waste (measured <7% Google result overlap).
-3. Plan before searching: one call for simple factual questions; multi-round searching only when the user asks for research.
-4. Stop when the sources suffice; never re-search just to "double-check".
-```
-
-## 切回 DeepSeek 搜索
-
-在 profile 自己的 `cordis.patch.yml` 末尾加：
+DSH 0.2.1+ 自带 `deepseek-search-api`（官方 Search API 单飞）与 `deepseek-fetch-api`。**不需要 Google 源时直接用内置 provider 更省事**：
 
 ```yaml
 - id: web
   config:
-    searchProvider: deepseek-official
+    searchProvider: deepseek-search-api
     fetchProvider: http
 ```
 
-或直接从 `bundles` 移除本包。
+本插件的价值仅在「**官方 + Google 双索引互补**」：默认 8 条来源中 6 条来自官方、2 条来自 Google，质量抽样与纯官方持平（1.792 vs 1.792，见 `../research/03-bench.md`），但多出 2 个 Google 独家源。若把本插件从 profile 移除，记得删掉指向 `serper` 的 `searchProvider` 覆盖。
+
+## 成本与延迟（实测，2026-10-17）
+
+| 方案 | 每次搜索 | 延迟 p50 | 说明 |
+|---|---|---|---|
+| **本插件 v3（官方主 + serper 补）** | **0.0122 元**（官方 0.005 + serper 0.0072） | 1.8–2.9s（serper 决定；英文 query ~1.5s） | 8 条 = 6 官方 + 2 Google |
+| 官方 Search API 单飞（内置 provider） | 0.005 元 | 0.34s | 8 条全官方，无 Google 源 |
+| 纯 serper（`native: false`） | 0.0072 元 | 1.9–2.9s | 8 条全 Google |
+| v0.2.2（serper + 原生 Messages） | 0.0263 元 | 5.3s | 8 条里 2 条裸链接 |
+
+- 官方 Search API 计费：5 元 / 1000 次成功请求（失败/空结果/429 不计费），QPS 5/账号；
+- **2026-11-01 起**：用 DeepSeek 模型 API 时「服务端代调 Search/Fetch」的隐形免费链路也开始按次收费；本插件走直连接口，成本从第一天起可精确预算。
+
+## 搜索纪律（建议写进全局 `~/.dsh/AGENTS.md`）
+
+每次 `web_search` 都会真实消耗官方 API 额度与 serper credit（成本 = 查询词数 × 0.0122 元）：
+
+1. **一次调用承载一个调研角度**：把该角度的查询词合并进一次调用（最多 4 个），不要为同义改写拆成多次调用。
+2. **查询词之间必须有实质差异**（不同语言/平台/技术栈/子问题）；同义改写的 Google 结果重叠率不足 7%，属于纯浪费。
+3. **先规划后搜索**：动手前想清楚需要哪几个角度，简单事实类问题只搜 1 次；只有明确「调研」时才多角度多轮搜索。
+4. **够答就停**：来源足够时不再追加搜索，不要因为「再确认一下」重复检索。
 
 ## 开发
 
 ```sh
 pnpm install
-pnpm link-harness # 把类型/依赖对齐到本机已安装的 dsh
-pnpm build        # 构建 client，含 client-id 一致性门禁
+pnpm link-harness   # 把类型/依赖对齐到本机已安装的 dsh
+pnpm build          # 构建 client（含 client-id 一致性门禁）
 pnpm typecheck
+pnpm test           # node --test（纯函数 + 合并/降级/重试/abort 单测）
+
+# 真实 API 冒烟（需要两个 key，会产生少量费用）
+set -a; . /tmp/keys.env; set +a
+node scripts/verify-live.mjs
 ```
 
+> Host 端 `lib/index.js` 与 `lib/merge.js` 是手写纯 ESM，**不经 `tsdown` 编译**；`tsdown`/`tsc` 只处理浏览器端 `src/client/* → lib/client.js`。改 Host 逻辑后跑 `node --check lib/index.js` + `pnpm test`。
+
+## 从 v0.2.x 升级
+
+- provider id、`cordis.patch.yml` 的 `searchProvider: serper` 均不变，**原地升级、无需改 profile**；
+- `native` 语义变为「是否合并 DeepSeek Search API」（`false` = 纯 serper，行为等同于旧版 `native: false`）；
+- 旧 `nativeApiKey` / `nativeApiKeyEnv` 在新 `deepseekApiKey*` 未配置时作为 fallback；
+- `nativeBaseURL`（旧版指向 `/anthropic/v1`）不再使用，官方端点默认 `https://api.deepseek.com/v1/tools`；
+- 不再需要 `nativeModel` / `nativeMaxUses`（v3 不调用模型）。
+
+## English
+
+**Merged web search for DeepSeek Harness, v3**: one `ctx.web` provider (`serper`) runs two direct HTTP retrievals in parallel — the DeepSeek Search API (`/v1/tools/search`, primary) and serper.dev Google results (secondary) — dedupes by normalized URL, interleaves by a fixed ratio (default 2:1 → six DeepSeek + two Google sources in the tool layer's eight slots), and truncates to `maxResults` with `truncated: false`. No auxiliary model turn: one request per backend, per search.
+
+Field upgrades: the Search API `summary` (measured 1893 chars) is folded and clipped into `snippet` (`summaryMaxChars`, default 600; `0` disables); `date` → `publishedAt`; `authority` can gate results via `minAuthority`; pure-English queries auto-switch serper to `gl=us, hl=en` (measured 3.6–10.5 s → 1.0–1.7 s). Either backend may fail, time out (5 s DeepSeek / 4.5 s serper), or lack a key — the other answers; only a double failure throws. Ratio tiers: `4 → 7+1`, `3 → 6+2`, `2 → 6+2` (default), `1.5 → 5+3`, `1 → 4+4`.
+
+Install: `dsh plugin --profile web add dsh-serper-search`, add `SERPER_API_KEY` and `DEEPSEEK_API_KEY` under `refs:` in `~/.dsh/.credentials.yaml` (or set them in the launch environment), restart `dsh web`. The GUI card keeps the six basic controls; advanced settings (`ratio`, `primary`, `summaryMaxChars`, timeouts, `autoLocale`, `minAuthority`, `maxRetries`) are patched through `cordis.patch.yml`.
+
+Cost: 0.0122 CNY per search (DeepSeek 0.005 + serper ~0.0072), latency dominated by serper (1.8–2.9 s). If Google coverage is not needed, the built-in `deepseek-search-api` provider is faster (0.34 s) and cheaper; use this plugin only when you want the two indexes merged.
+
+Dev: `pnpm build`, `pnpm typecheck`, `pnpm test` (node --test), and `scripts/verify-live.mjs` for a real-API smoke check. Host files `lib/index.js` and `lib/merge.js` are hand-written ESM (not built by tsdown); run `node --check` plus the unit tests after editing them.
