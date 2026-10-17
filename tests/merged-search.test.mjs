@@ -643,3 +643,17 @@ test('the merged provider forwards host cap and social demotion through its opti
   const lastEditorial = hosts.map((host) => host.endsWith('reddit.com') || host.endsWith('youtube.com')).lastIndexOf(false)
   assert.ok(firstSocial === -1 || firstSocial > lastEditorial, 'social hosts should trail editorial hosts')
 })
+
+test('a degraded single-backend result still honors the per-host cap', async () => {
+  const deepseekFetch = stubFetch(() => jsonResponse({ error: { message: 'boom' } }, 500))
+  const serperFetch = stubFetch(() => jsonResponse(serperPayload([
+    'https://same.example/1',
+    'https://same.example/2',
+    'https://same.example/3',
+    'https://other.example/1',
+  ])))
+  const provider = new MergedSearchProvider(() => mergedOptions({ deepseekFetch, serperFetch }))
+  const result = await provider.search({ query: 'degraded host cap', maxResults: 8 }, new AbortController().signal)
+  const sameHost = result.sources.filter((source) => new URL(source.url).hostname === 'same.example')
+  assert.ok(sameHost.length <= 2, `expected at most 2 same-host sources, got ${sameHost.length}`)
+})
