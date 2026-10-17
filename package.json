@@ -49,7 +49,8 @@
     "typecheck": "tsc --noEmit",
     "link-harness": "sh scripts/link-harness.sh",
     "release": "sh scripts/release.sh",
-    "test": "node --test tests/merged-search.test.mjs"
+    "test": "node --test tests/merged-search.test.mjs",
+    "sync-preset-cap": "node scripts/sync-dsh-preset-cap.mjs"
   },
   "keywords": [
     "dsh-plugin",

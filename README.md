@@ -31,7 +31,24 @@ dsh plugin --profile web add dsh-serper-search
 1. 配置两个 key（推荐 credentials 域，GUI 卡片也可填 serper key）：
    - `~/.dsh/.credentials.yaml` 的 `refs:` 下加 `SERPER_API_KEY: <serper key>` 与 `DEEPSEEK_API_KEY: <deepseek key>`（后者通常已有）；
    - 或启动环境变量 `SERPER_API_KEY` / `DEEPSEEK_API_KEY`。
-2. 重启 `dsh web`，浏览器刷新页面即可生效。
+2. **确保本插件被选中为搜索 provider（必须）**：本包的 bundle patch 会把 `ctx.web.searchProvider` 钉成 `serper`；但**用户层 profile patch 晚于 bundle，会覆盖它**——例如在 GUI「插件 → 内置插件配置 → 网页搜索」里开过「启用新版 Web 搜索 API」，profile 里就会留下 `searchProvider: deepseek-search-api`，此时本插件注册了也不会被使用。在 `~/.dsh/profiles/web/cordis.patch.yml` 里显式写：
+
+   ```yaml
+   - id: web
+     config:
+       searchProvider: serper      # 本插件注册的 id
+       fetchProvider: http         # 推荐：官方 Fetch 的 Markdown 带反斜杠转义，内置 http fetch 不做反转义
+   ```
+
+3. **可选：调插件参数**（同一个 patch 文件）：
+
+   ```yaml
+   - id: web-search-serper
+     config:
+       serperTimeoutMs: 10000      # serper 单路超时；本机实测 1.6–11s，默认 4500 偏紧
+   ```
+
+4. 重启 `dsh web`，浏览器刷新页面即可生效。
 
 ## GUI 设置页
 
@@ -86,6 +103,31 @@ DSH 0.2.1+ 自带 `deepseek-search-api`（官方 Search API 单飞）与 `deepse
 
 本插件的价值仅在「**官方 + Google 双索引互补**」：默认 8 条来源中 6 条来自官方、2 条来自 Google，质量抽样与纯官方持平（1.792 vs 1.792，见 `../research/03-bench.md`），但多出 2 个 Google 独家源。若把本插件从 profile 移除，记得删掉指向 `serper` 的 `searchProvider` 覆盖。
 
+## 来源条数上限（8 → 12/N，为什么不在插件里）
+
+`web_search` 一次调用最终保留几条来源，由工具层 `@deepseek-ai/dsh-tool-web` 的 `searchMaxResults` 决定（默认 **8**），而 `tool-web` 是挂在 **agent preset**（默认 `standard`）里的，**不在本插件配置里**——插件只按工具层传入的 `maxResults` 返回结果，无法自行突破。
+
+为什么不能只加一行配置：profile patch 对某个插件的 `config` 是**整体替换**、不能深合并嵌套字段，所以要覆盖整个 `preset-standard`。仓库自带生成脚本（从当前 dsh 的 `--dump-config` 重建覆盖块，写入 profile patch 的标记区）：
+
+```sh
+node scripts/sync-dsh-preset-cap.mjs 12     # 或 npm run sync-preset-cap -- 12
+```
+
+- 脚本会在 `~/.dsh/profiles/web/cordis.patch.yml` 里写入/替换 `# >>> dsh preset-standard override >>>` 标记区（169 行，含完整 preset 插件列表）；
+- **DSH 升级后重跑一次**，避免 pin 住的旧 preset 缺少新插件；
+- 只支持 `standard` preset；若你在 GUI 切换了其它 preset（ptc / cordis），那边的 `tool-web` 仍是 8 条。
+
+| N | 8 槽位构成 | 每次搜索增量成本 | 适用 |
+|---|---|---|---|
+| 8（默认） | 6 官方 + 2 Google | — | 日常 |
+| 10 | 7 + 3 | 约 +0.3k 上下文 token | 轻微加广 |
+| **12（推荐）** | **8 + 4** | 约 +0.5k token | 调研 |
+| 16 | 11 + 5 | 约 +1k token | 深调研；第 13 名后噪声上升 |
+| 20+ | 14+ + 6+ | +1.5k 以上 | 不建议 |
+
+关键事实：**两个搜索 API 都按请求次数计费，`count` 条数不影响单价、也不显著影响延迟**——扩大 N 只增加模型上下文 token，不增加 API 费用。serper 单次最多返回 10 条，N≤20 时副路槽位够用。
+生效条件：重启 `dsh web`，并且 **agent preset 在 Agent 创建时读取 → 只对新会话生效**（已存在的会话保持旧上限）。不想 pin preset 时，也可以保持默认 8 条，把调研拆成两次搜索（API 费翻倍）。
+
 ## 成本与延迟（实测，2026-10-17）
 
 | 方案 | 每次搜索 | 延迟 p50 | 说明 |
@@ -95,7 +137,7 @@ DSH 0.2.1+ 自带 `deepseek-search-api`（官方 Search API 单飞）与 `deepse
 | 纯 serper（`native: false`） | 0.0072 元 | 1.9–2.9s | 8 条全 Google |
 | v0.2.2（serper + 原生 Messages） | 0.0263 元 | 5.3s | 8 条里 2 条裸链接 |
 
-- 官方 Search API 计费：5 元 / 1000 次成功请求（失败/空结果/429 不计费），QPS 5/账号；
+- 官方 Search API 计费：5 元 / 1000 次成功请求（失败/空结果/429 不计费），QPS 5/账号；**来源条数（8/12/16）不影响 API 单价**，只影响上下文 token（12 条约 +0.5k/次）；
 - **本机 serper 延迟方差极大**（实测 1.6–11s）：`serperTimeoutMs` 默认 4500ms 下，慢网/冷启动时 serper 会超时降级为纯官方（结果仍可用，但拿不到 2 条 Google 源）；需要更高 Google 源命中率可调到 6000–8000ms，代价是尾部延迟同比例上升；
 - **2026-11-01 起**：用 DeepSeek 模型 API 时「服务端代调 Search/Fetch」的隐形免费链路也开始按次收费；本插件走直连接口，成本从第一天起可精确预算。
 
@@ -116,6 +158,7 @@ pnpm link-harness   # 把类型/依赖对齐到本机已安装的 dsh
 pnpm build          # 构建 client（含 client-id 一致性门禁）
 pnpm typecheck
 pnpm test           # node --test（纯函数 + 合并/降级/重试/abort 单测）
+pnpm sync-preset-cap -- 12   # 可选：把 web_search 来源上限提到 12（改 profile patch 的 preset 覆盖）
 
 # 真实 API 冒烟（需要两个 key，会产生少量费用）
 set -a; . /tmp/keys.env; set +a
@@ -138,7 +181,19 @@ node scripts/verify-live.mjs
 
 Field upgrades: the Search API `summary` (measured 1893 chars) is folded and clipped into `snippet` (`summaryMaxChars`, default 600; `0` disables); `date` → `publishedAt`; `authority` can gate results via `minAuthority`; pure-English queries auto-switch serper to `gl=us, hl=en` (measured 3.6–10.5 s → 1.0–1.7 s). Either backend may fail, time out (5 s DeepSeek / 4.5 s serper), or lack a key — the other answers; only a double failure throws. Ratio tiers: `4 → 7+1`, `3 → 6+2`, `2 → 6+2` (default), `1.5 → 5+3`, `1 → 4+4`.
 
-Install: `dsh plugin --profile web add dsh-serper-search`, add `SERPER_API_KEY` and `DEEPSEEK_API_KEY` under `refs:` in `~/.dsh/.credentials.yaml` (or set them in the launch environment), restart `dsh web`. The GUI card keeps the six basic controls; advanced settings (`ratio`, `primary`, `summaryMaxChars`, timeouts, `autoLocale`, `minAuthority`, `maxRetries`) are patched through `cordis.patch.yml`.
+Install: `dsh plugin --profile web add dsh-serper-search`, add `SERPER_API_KEY` and `DEEPSEEK_API_KEY` under `refs:` in `~/.dsh/.credentials.yaml` (or set them in the launch environment). **Also pin the provider in the profile patch** — the bundle patch pins `searchProvider: serper`, but a user-level `web` override (for example the GUI "Use the new Web Search API" switch, which writes `deepseek-search-api`) wins over it:
+
+```yaml
+- id: web
+  config:
+    searchProvider: serper
+    fetchProvider: http
+- id: web-search-serper
+  config:
+    serperTimeoutMs: 10000
+```
+
+Restart `dsh web`. The GUI card keeps the six basic controls; advanced settings (`ratio`, `primary`, `summaryMaxChars`, timeouts, `autoLocale`, `minAuthority`, `maxRetries`) are patched through `cordis.patch.yml`. The per-search source cap (default 8) belongs to `dsh-tool-web.searchMaxResults` inside the agent preset, not to this plugin; `scripts/sync-dsh-preset-cap.mjs 12` regenerates the `preset-standard` override block that raises it to 12 (restart + new session required; API cost is per request, so the cap only changes context tokens).
 
 Cost: 0.0122 CNY per search (DeepSeek 0.005 + serper ~0.0072), latency dominated by serper (1.8–2.9 s). If Google coverage is not needed, the built-in `deepseek-search-api` provider is faster (0.34 s) and cheaper; use this plugin only when you want the two indexes merged.
 
