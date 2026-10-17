@@ -6,7 +6,9 @@
  *
  * Requires SERPER_API_KEY and DEEPSEEK_API_KEY in the environment. Runs three
  * queries through both backends, merges them exactly as the harness does, and
- * prints latency / composition / snippet lengths. It never prints the keys.
+ * prints latency / composition / snippet lengths. It never prints the keys and
+ * exits non-zero only when a merged search itself fails (per-backend probes
+ * fail softly so a slow serper run still reports partial results).
  */
 import { DeepSeekSearchApiBackend, MergedSearchProvider, SerperSearchProvider } from '../lib/index.js'
 
@@ -32,7 +34,7 @@ function backendOptions() {
       apiKey: deepseekKey,
       baseURL: 'https://api.deepseek.com/v1/tools',
       count: 10,
-      timeoutMs: 5000,
+      timeoutMs: 4500,
       summaryMaxChars: 600,
       minAuthority: -1,
       maxRetries: 1,
@@ -53,31 +55,51 @@ const provider = new MergedSearchProvider(backendOptions)
 const deepseek = new DeepSeekSearchApiBackend(() => backendOptions().deepseek)
 const serper = new SerperSearchProvider(() => backendOptions().serper)
 
-/** Which backend produced each host, for the composition report. */
-function composition(result) {
-  const hosts = result.sources.map((source) => new URL(source.url).hostname)
-  return { count: result.sources.length, hosts: hosts.slice(0, 8) }
+/** Short failure description for a caught backend error. */
+function failureOf(error) {
+  return `${error?.code ?? 'ERROR'}: ${String(error?.message ?? error).slice(0, 100)}`
 }
+
+let failures = 0
 
 for (const query of QUERIES) {
   const started = Date.now()
-  const result = await provider.search({ query, maxResults: 8 })
-  const elapsed = Date.now() - started
-  const snippetLengths = result.sources.map((source) => source.snippet?.length ?? 0)
-  const dated = result.sources.filter((source) => source.publishedAt !== undefined).length
-  console.log('\n=== query:', query)
-  console.log(`merged: ${elapsed}ms, ${result.sources.length} sources, truncated=${String(result.truncated)}, dated=${dated}/8`)
-  console.log(`snippet lengths: ${JSON.stringify(snippetLengths)}`)
-  console.log(`content (serper answerBox): ${result.content === undefined ? '(none)' : JSON.stringify(result.content.slice(0, 80))}`)
-  console.table(composition(result).hosts.map((host, index) => ({ rank: index + 1, host })))
+  try {
+    const result = await provider.search({ query, maxResults: 8 })
+    const elapsed = Date.now() - started
+    const snippetLengths = result.sources.map((source) => source.snippet?.length ?? 0)
+    const dated = result.sources.filter((source) => source.publishedAt !== undefined).length
+    console.log('\n=== query:', query)
+    console.log(`merged: ${elapsed}ms, ${result.sources.length} sources, truncated=${String(result.truncated)}, dated=${dated}/${result.sources.length}`)
+    console.log(`snippet lengths: ${JSON.stringify(snippetLengths)}`)
+    console.log(`content (serper answerBox): ${result.content === undefined ? '(none)' : JSON.stringify(result.content.slice(0, 80))}`)
+    console.table(result.sources.slice(0, 8).map((source, index) => ({
+      rank: index + 1,
+      host: new URL(source.url).hostname,
+      snippet: source.snippet?.length ?? 0,
+    })))
+  } catch (error) {
+    failures += 1
+    console.error(`\n=== query: ${query}\nmerged: FAILED ${failureOf(error)}`)
+  }
 }
 
-// Per-backend timings for the same first query (two extra requests).
-const first = QUERIES[0]
+// Per-backend timings for the first query; failures are reported, not thrown.
 for (const [label, backend] of [['deepseek', deepseek], ['serper', serper]]) {
   const started = Date.now()
-  const result = await backend.search({ query: first, maxResults: 8 })
-  console.log(`\n${label}: ${Date.now() - started}ms, ${result.sources.length} sources, first snippet ${result.sources[0]?.snippet?.length ?? 0} chars`)
+  try {
+    const result = await backend.search({ query: QUERIES[0], maxResults: 8 })
+    const first = result.sources[0]
+    console.log(`\n${label}: ${Date.now() - started}ms, ${result.sources.length} sources, first snippet ${first?.snippet?.length ?? 0} chars, dated ${result.sources.filter((source) => source.publishedAt !== undefined).length}/${result.sources.length}`)
+  } catch (error) {
+    failures += 1
+    console.log(`\n${label}: FAILED after ${Date.now() - started}ms — ${failureOf(error)}`)
+  }
 }
 
-console.log('\nverify-live: OK')
+if (failures > 0) {
+  console.error(`\nverify-live: ${failures} failure(s)`)
+  process.exitCode = 1
+} else {
+  console.log('\nverify-live: OK')
+}

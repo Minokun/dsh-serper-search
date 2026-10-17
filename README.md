@@ -1,6 +1,6 @@
 # dsh-serper-search
 
-DeepSeek **Search API**（官方自研搜索引擎）+ [serper.dev](https://serper.dev)（Google 搜索）双擎互补的搜索插件，接入 DeepSeek Harness 的 web 能力缝（`ctx.web`）。安装后，DSH 内置的 `web_search` 每次只发两次直连检索请求（无辅助模型调用），结果按 URL 去重后以 **固定比例交错**（默认 2:1）合并，让模型同时拿到 DeepSeek 自有索引与 Google 索引。
+DeepSeek **Search API**（官方自研搜索引擎）+ [serper.dev](https://serper.dev)（Google 搜索）双擎互补的搜索插件，接入 DeepSeek Harness 的 web 能力缝（`ctx.web`）。安装后，DSH 内置的 `web_search` 每次只发两次直连检索请求（`native:true` 且两路可用时；单路缺 key 或 `native:false` 时只发一次，无辅助模型调用），结果按 URL 去重后以 **固定比例交错**（默认 2:1）合并，让模型同时拿到 DeepSeek 自有索引与 Google 索引。
 
 > 为什么互补：实测同一组 query 下，DeepSeek Search API 与 Google 的结果 URL 重叠仅 **1.3%**（同后端重复调用噪声地板 43%–100%，故为真实索引差异）。DeepSeek 侧更快、更贴中文，Google 侧覆盖面更广，两者互补而不互相替代。
 >
@@ -16,7 +16,7 @@ DeepSeek **Search API**（官方自研搜索引擎）+ [serper.dev](https://serp
   - 官方 `date` → `publishedAt`；serper 中文日期（`2026年8月13日`）→ ISO；
   - 官方 `authority` 支持 `minAuthority` 过滤（保留 `-1` 未知站点）；
   - 纯英文/代码 query（`autoLocale` 默认开启、`gl=cn` 时）自动切到 `gl=us, hl=en`：实测英文 query 延迟从 3.6–10.5s 降到 1.0–1.7s。
-- 合并：按归一化 URL 去重（去 fragment / `utm_*` / `spm_*` / 百度百科等追踪参数；`chapter`、`channel`、`from=20` 等业务参数不误删）→ 按固定比例模式交错 → 截到 `maxResults`（工具层默认 8）→ 返回 `truncated: false`（避免工具给模型追加 "Refine the query for more" 诱导重搜的尾注）。
+- 合并：按归一化 URL 去重（去 fragment / `utm_*` / `spm_*` / 百度百科等追踪参数；`chapter`、`channel`、`from=20` 等业务参数不误删）→ 按固定比例模式交错 → 截到 `maxResults`（工具层默认 8）→ 返回 `truncated: false`（单 query 时避免工具给模型追加 "Refine the query for more" 诱导重搜的尾注；多 query 时工具层轮转仍可能自行追加，插件无法控制）。
 - 降级：任一路失败/超时/缺 key，另一路独立成答；两路都失败才报错。每路独立超时（官方 5000ms / serper 4500ms），官方 429/5xx 有 1s→2s 指数退避重试。
 - 比例档位（8 槽位最终构成）：`4 → 7主+1补`、`3 → 6+2`、`2 → 6+2`（默认）、`1.5 → 5+3`、`1 → 4+4`，可在 patch 里配置。
 
@@ -63,7 +63,7 @@ dsh plugin --profile web add dsh-serper-search
 | `deepseekApiKey` / `deepseekApiKeyEnv` | — / `DEEPSEEK_API_KEY` | 官方 API key 或凭据引用 |
 | `deepseekBaseURL` | `https://api.deepseek.com/v1/tools` | 可用 `DEEPSEEK_SEARCH_API_BASE_URL` 覆盖 |
 | `deepseekCount` | `10` | 官方每次请求条数下限（1–50） |
-| `deepseekTimeoutMs` | `5000` | 官方单路超时 |
+| `deepseekTimeoutMs` | `4500` | 官方单路超时；重试共享同一预算，最坏尾部 ≈ timeout + 少量退避 |
 | `summaryMaxChars` | `600` | 官方 `summary` 注入 `snippet` 的最大字符数；`0` 关闭 |
 | `primary` | `deepseek` | 主导路（决定交错前排与去重保留优先级） |
 | `ratio` | `2` | 槽位比例，五档白名单 `1 / 1.5 / 2 / 3 / 4` |
@@ -96,6 +96,7 @@ DSH 0.2.1+ 自带 `deepseek-search-api`（官方 Search API 单飞）与 `deepse
 | v0.2.2（serper + 原生 Messages） | 0.0263 元 | 5.3s | 8 条里 2 条裸链接 |
 
 - 官方 Search API 计费：5 元 / 1000 次成功请求（失败/空结果/429 不计费），QPS 5/账号；
+- **本机 serper 延迟方差极大**（实测 1.6–11s）：`serperTimeoutMs` 默认 4500ms 下，慢网/冷启动时 serper 会超时降级为纯官方（结果仍可用，但拿不到 2 条 Google 源）；需要更高 Google 源命中率可调到 6000–8000ms，代价是尾部延迟同比例上升；
 - **2026-11-01 起**：用 DeepSeek 模型 API 时「服务端代调 Search/Fetch」的隐形免费链路也开始按次收费；本插件走直连接口，成本从第一天起可精确预算。
 
 ## 搜索纪律（建议写进全局 `~/.dsh/AGENTS.md`）
