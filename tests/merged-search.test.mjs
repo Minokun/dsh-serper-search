@@ -107,16 +107,16 @@ function mergedOptions({ deepseekFetch, serperFetch, overrides = {} } = {}) {
   }
 }
 
-const A_URLS = Array.from({ length: 8 }, (_, index) => `https://a.example/${index}`)
-const B_URLS = Array.from({ length: 8 }, (_, index) => `https://b.example/${index}`)
+const A_URLS = Array.from({ length: 8 }, (_, index) => `https://a${index}.example/${index}`)
+const B_URLS = Array.from({ length: 8 }, (_, index) => `https://b${index}.example/${index}`)
 
 /** Composition of a merged source list by host. */
 function composition(sources) {
   const counts = { a: 0, b: 0 }
   for (const source of sources) {
     const host = new URL(source.url).hostname
-    if (host.startsWith('a.')) counts.a += 1
-    else if (host.startsWith('b.')) counts.b += 1
+    if (host.startsWith('a') && host.endsWith('.example')) counts.a += 1
+    else if (host.startsWith('b') && host.endsWith('.example')) counts.b += 1
   }
   return counts
 }
@@ -154,7 +154,7 @@ test('primary: serper swaps which backend leads the interleave', () => {
     { ratio: 2, maxResults: 8 },
   )
   assert.deepEqual(composition(merged.sources), { a: 2, b: 6 })
-  assert.equal(merged.sources[0].url.startsWith('https://b.example/'), true)
+  assert.equal(merged.sources[0].url.startsWith('https://b0.example/'), true)
 })
 
 test('an exhausted primary is filled by the secondary without gaps', () => {
@@ -570,4 +570,76 @@ test('maxResults: 3 and an omitted cap are honored', () => {
   const uncapped = mergeSources(A_URLS.map((url) => ({ url })), B_URLS.map((url) => ({ url })), { ratio: 2 })
   assert.equal(uncapped.sources.length, 16)
   assert.equal(uncapped.truncated, false)
+})
+
+// ── v3.1 quality rules: per-host cap, locale dedupe, social demotion ────────
+
+test('maxPerHost caps one host at two sources by default', () => {
+  const repeated = Array.from({ length: 6 }, (_, index) => ({ url: `https://same.example/${index}` }))
+  const others = Array.from({ length: 6 }, (_, index) => ({ url: `https://other${index}.example/${index}` }))
+  const merged = mergeSources(repeated, others, { ratio: 2, maxResults: 10, maxPerHost: 2 })
+  const sameHost = merged.sources.filter((source) => new URL(source.url).hostname === 'same.example')
+  assert.equal(sameHost.length, 2)
+  assert.equal(merged.sources.length, 8)
+})
+
+test('maxPerHost: 0 disables the per-host cap', () => {
+  const repeated = Array.from({ length: 6 }, (_, index) => ({ url: `https://same.example/${index}` }))
+  const merged = mergeSources(repeated, [], { ratio: 2, maxResults: 6, maxPerHost: 0 })
+  assert.equal(merged.sources.length, 6)
+  assert.equal(merged.sources.filter((source) => new URL(source.url).hostname === 'same.example').length, 6)
+})
+
+test('localized variants of the same page collapse, but the unlocalized page survives', () => {
+  const merged = mergeSources([
+    { url: 'https://bench.example/de/models/compare' },
+    { url: 'https://bench.example/fr/models/compare' },
+    { url: 'https://bench.example/models/compare' },
+  ], [], { ratio: 2, maxResults: 8, maxPerHost: 0 })
+  assert.equal(merged.sources.length, 2)
+  assert.deepEqual(merged.sources.map((source) => new URL(source.url).pathname).sort(), ['/de/models/compare', '/models/compare'])
+})
+
+test('social/video hosts are demoted behind editorial sources', () => {
+  const ranked = [
+    { url: 'https://www.reddit.com/r/node/comments/1' },
+    { url: 'https://www.youtube.com/watch?v=1' },
+    { url: 'https://github.com/oven-sh/bun' },
+    { url: 'https://stackoverflow.com/q/1' },
+  ]
+  const demoted = mergeSources(ranked, [], { ratio: 2, maxResults: 4, maxPerHost: 0, demoteSocial: true })
+  assert.deepEqual(demoted.sources.map((source) => new URL(source.url).hostname), [
+    'github.com',
+    'stackoverflow.com',
+    'www.reddit.com',
+    'www.youtube.com',
+  ])
+  const untouched = mergeSources(ranked, [], { ratio: 2, maxResults: 4, maxPerHost: 0, demoteSocial: false })
+  assert.equal(new URL(untouched.sources[0].url).hostname, 'www.reddit.com')
+})
+
+test('the merged provider forwards host cap and social demotion through its options', async () => {
+  const deepseekFetch = stubFetch(() => jsonResponse(deepseekPayload([
+    'https://api-docs.deepseek.com/a',
+    'https://api-docs.deepseek.com/b',
+    'https://api-docs.deepseek.com/c',
+    'https://api-docs.deepseek.com/d',
+  ])))
+  const serperFetch = stubFetch(() => jsonResponse(serperPayload([
+    'https://www.reddit.com/r/1',
+    'https://www.youtube.com/watch?v=1',
+    'https://github.com/o/r',
+  ], undefined)))
+  const base = mergedOptions({ deepseekFetch, serperFetch })
+  const provider = new MergedSearchProvider(() => ({
+    ...base,
+    maxPerHost: 2,
+    demoteSocial: true,
+  }))
+  const result = await provider.search({ query: 'quality rules', maxResults: 8 }, new AbortController().signal)
+  const hosts = result.sources.map((source) => new URL(source.url).hostname)
+  assert.ok(hosts.filter((host) => host === 'api-docs.deepseek.com').length <= 2)
+  const firstSocial = hosts.findIndex((host) => host.endsWith('reddit.com') || host.endsWith('youtube.com'))
+  const lastEditorial = hosts.map((host) => host.endsWith('reddit.com') || host.endsWith('youtube.com')).lastIndexOf(false)
+  assert.ok(firstSocial === -1 || firstSocial > lastEditorial, 'social hosts should trail editorial hosts')
 })

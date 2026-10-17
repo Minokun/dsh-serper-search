@@ -1,6 +1,6 @@
 {
   "name": "dsh-serper-search",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Merged web search for the DeepSeek Harness: DeepSeek Search API (primary) + serper.dev Google results (secondary), interleaved by a fixed ratio and registered as one provider on the ctx.web seam so the built-in web_search tool serves both at once.",
   "license": "MIT",
   "author": "Minokun",

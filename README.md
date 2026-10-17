@@ -16,7 +16,7 @@ DeepSeek **Search API**（官方自研搜索引擎）+ [serper.dev](https://serp
   - 官方 `date` → `publishedAt`；serper 中文日期（`2026年8月13日`）→ ISO；
   - 官方 `authority` 支持 `minAuthority` 过滤（保留 `-1` 未知站点）；
   - 纯英文/代码 query（`autoLocale` 默认开启、`gl=cn` 时）自动切到 `gl=us, hl=en`：实测英文 query 延迟从 3.6–10.5s 降到 1.0–1.7s。
-- 合并：按归一化 URL 去重（去 fragment / `utm_*` / `spm_*` / 百度百科等追踪参数；`chapter`、`channel`、`from=20` 等业务参数不误删）→ 按固定比例模式交错 → 截到 `maxResults`（工具层默认 8）→ 返回 `truncated: false`（单 query 时避免工具给模型追加 "Refine the query for more" 诱导重搜的尾注；多 query 时工具层轮转仍可能自行追加，插件无法控制）。
+- 合并：按归一化 URL 去重（去 fragment / `utm_*` / `spm_*` / 百度百科等追踪参数；`chapter`、`channel`、`from=20` 等业务参数不误删）→ **v3.1 质量规则**（单域名最多 `maxPerHost: 2` 条、同页 `/de/` `/fr/` 本地化变体折叠、reddit/x.com/HN/YouTube 等社交视频源降权到编辑类来源之后）→ 按固定比例模式交错 → 截到 `maxResults`（工具层默认 8/12）→ 返回 `truncated: false`（单 query 时避免工具给模型追加 "Refine the query for more" 诱导重搜的尾注；多 query 时工具层轮转仍可能自行追加，插件无法控制）。
 - 降级：任一路失败/超时/缺 key，另一路独立成答；两路都失败才报错。每路独立超时（官方 4500ms / serper 4500ms，重试与首次请求共享同一预算），官方 429/5xx 有 1s→2s 指数退避重试；超时/取消覆盖到响应体读取阶段。
 - 比例档位（8 槽位最终构成）：`4 → 7主+1补`、`3 → 6+2`、`2 → 6+2`（默认）、`1.5 → 5+3`、`1 → 4+4`，可在 patch 里配置。
 
@@ -85,6 +85,8 @@ dsh plugin --profile web add dsh-serper-search
 | `primary` | `deepseek` | 主导路（决定交错前排与去重保留优先级） |
 | `ratio` | `2` | 槽位比例，五档白名单 `1 / 1.5 / 2 / 3 / 4` |
 | `minAuthority` | `-1` | 官方结果 authority 下限（`-1` 不过滤） |
+| `maxPerHost` | `2` | 单域名最多占几条（0 = 不限制）；保持来源多样性 |
+| `demoteSocial` | `true` | reddit / x.com / HN / YouTube 等社交视频源排到编辑类来源之后 |
 | `maxRetries` | `1` | 官方 429/5xx 重试次数 |
 | `logLevel` | `summary` | `off` / `summary` / `verbose` |
 | `native` | `true` | 兼容字段：v3 中含义为「是否合并 DeepSeek Search API」；`false` = 纯 serper |
@@ -127,6 +129,18 @@ node scripts/sync-dsh-preset-cap.mjs 12     # 或 npm run sync-preset-cap -- 12
 
 关键事实：**两个搜索 API 都按请求次数计费，`count` 条数不影响单价、也不显著影响延迟**——扩大 N 只增加模型上下文 token，不增加 API 费用。serper 单次最多返回 10 条，N≤20 时副路槽位够用。
 生效条件：重启 `dsh web`，并且 **agent preset 在 Agent 创建时读取 → 只对新会话生效**（已存在的会话保持旧上限）。不想 pin preset 时，也可以保持默认 8 条，把调研拆成两次搜索（API 费翻倍）。
+
+## 合并质量规则（v3.1，来自两个真实调研会话的复盘）
+
+对「DeepSeek V4.1 Flash 排名调研」与「聊天软件对比」两个会话做了来源归因复盘后，加入三条 merge 规则（均可配）：
+
+| 规则 | 默认 | 解决的实测问题 |
+|---|---|---|
+| `maxPerHost` 单域名上限 | `2` | 某排名调研里 `artificialanalysis.ai` 的 4 个本地化 URL（中/葡/德/英）占了 4/12 席；现在实测 max/host = 2 |
+| 本地化变体去重 | 开 | 同页 `/de/blog/x` 与 `/fr/blog/x` 折叠为一个（仅当两者都带 locale 前缀，白名单匹配，不误伤 `/id/…` 业务路径） |
+| `demoteSocial` 社交降权 | `true` | 英文技术 query 前排常被 reddit/x.com/HN/YouTube 占据；现在它们排在编辑类与官方来源之后，只填剩余席位 |
+
+复盘结论：serper 的独家价值主要在**官方文档/模型页**（企业微信开发者文档、钉钉 Stream、core.telegram.org、HuggingFace 模型页等，DeepSeek 索引没有），弱点正是上述三类噪声——v3.1 针对的是噪声，不动互补比例。
 
 ## 成本与延迟（实测，2026-10-17）
 
@@ -196,5 +210,7 @@ Install: `dsh plugin --profile web add dsh-serper-search`, add `SERPER_API_KEY` 
 Restart `dsh web`. The GUI card keeps the six basic controls; advanced settings (`ratio`, `primary`, `summaryMaxChars`, timeouts, `autoLocale`, `minAuthority`, `maxRetries`) are patched through `cordis.patch.yml`. The per-search source cap (default 8) belongs to `dsh-tool-web.searchMaxResults` inside the agent preset, not to this plugin; `scripts/sync-dsh-preset-cap.mjs 12` regenerates the `preset-standard` override block that raises it to 12 (restart + new session required; API cost is per request, so the cap only changes context tokens).
 
 Cost: 0.0122 CNY per search (DeepSeek 0.005 + serper ~0.0072), latency dominated by serper (1.8–2.9 s). If Google coverage is not needed, the built-in `deepseek-search-api` provider is faster (0.34 s) and cheaper; use this plugin only when you want the two indexes merged.
+
+v3.1 adds merge-quality rules measured from two real research sessions: `maxPerHost` (default 2) stops one site from squatting on the result list (localized variants like `/de/…` vs `/fr/…` collapse first), and `demoteSocial` (default true) sorts reddit/x.com/HN/YouTube-style hosts behind editorial and official sources. Both are patch-only settings with defaults, so upgrades need no config change.
 
 Dev: `pnpm build`, `pnpm typecheck`, `pnpm test` (node --test), and `scripts/verify-live.mjs` for a real-API smoke check. Host files `lib/index.js` and `lib/merge.js` are hand-written ESM (not built by tsdown); run `node --check` plus the unit tests after editing them.
