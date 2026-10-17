@@ -393,13 +393,6 @@ test('both backends aborting rejects WEB_ABORTED, not WEB_PROVIDER_ERROR', async
 
 test('a backend timeout is not retried (one request, no retryable path)', async () => {
   let attempts = 0
-  const hanging = () => {
-    attempts += 1
-    return new Promise((resolve, reject) => {
-      const onAbort = () => reject(new DOMException('aborted', 'AbortError'))
-      // The gate's signal aborts the request after timeoutMs.
-    })
-  }
   const backend = new DeepSeekSearchApiBackend(() => ({
     apiKey: 'k',
     baseURL: 'https://api.deepseek.com/v1/tools',

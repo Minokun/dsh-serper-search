@@ -7,8 +7,8 @@
  * Requires SERPER_API_KEY and DEEPSEEK_API_KEY in the environment. Runs three
  * queries through both backends, merges them exactly as the harness does, and
  * prints latency / composition / snippet lengths. It never prints the keys and
- * exits non-zero only when a merged search itself fails (per-backend probes
- * fail softly so a slow serper run still reports partial results).
+ * exits non-zero only when a merged search fails; per-backend probe failures are
+ * reported as warnings (a slow serper run still reports partial results).
  */
 import { DeepSeekSearchApiBackend, MergedSearchProvider, SerperSearchProvider } from '../lib/index.js'
 
@@ -60,7 +60,8 @@ function failureOf(error) {
   return `${error?.code ?? 'ERROR'}: ${String(error?.message ?? error).slice(0, 100)}`
 }
 
-let failures = 0
+let mergedFailures = 0
+let probeFailures = 0
 
 for (const query of QUERIES) {
   const started = Date.now()
@@ -79,7 +80,7 @@ for (const query of QUERIES) {
       snippet: source.snippet?.length ?? 0,
     })))
   } catch (error) {
-    failures += 1
+    mergedFailures += 1
     console.error(`\n=== query: ${query}\nmerged: FAILED ${failureOf(error)}`)
   }
 }
@@ -92,13 +93,14 @@ for (const [label, backend] of [['deepseek', deepseek], ['serper', serper]]) {
     const first = result.sources[0]
     console.log(`\n${label}: ${Date.now() - started}ms, ${result.sources.length} sources, first snippet ${first?.snippet?.length ?? 0} chars, dated ${result.sources.filter((source) => source.publishedAt !== undefined).length}/${result.sources.length}`)
   } catch (error) {
-    failures += 1
+    probeFailures += 1
     console.log(`\n${label}: FAILED after ${Date.now() - started}ms — ${failureOf(error)}`)
   }
 }
 
-if (failures > 0) {
-  console.error(`\nverify-live: ${failures} failure(s)`)
+if (probeFailures > 0) console.warn(`\nverify-live: ${probeFailures} per-backend probe failure(s) (non-fatal)`)
+if (mergedFailures > 0) {
+  console.error(`\nverify-live: ${mergedFailures} merged failure(s)`)
   process.exitCode = 1
 } else {
   console.log('\nverify-live: OK')
