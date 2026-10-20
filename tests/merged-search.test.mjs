@@ -9,6 +9,7 @@
 import test from 'node:test'
 import http from 'node:http'
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 
 import {
   RATIO_PATTERNS,
@@ -20,7 +21,7 @@ import {
   normalizeSerperDate,
   normalizeUrl,
 } from '../lib/merge.js'
-import { DeepSeekSearchApiBackend, MergedSearchProvider, apply } from '../lib/index.js'
+import { Config, DeepSeekSearchApiBackend, MergedSearchProvider, apply } from '../lib/index.js'
 
 /** Build a DeepSeek Search API payload for the given URLs. */
 function deepseekPayload(urls) {
@@ -489,6 +490,8 @@ test('apply() registers the merged provider and runs a full search through fake 
   const ctx = {
     logger,
     get: () => undefined,
+    inject: () => {},
+    on: () => {},
     web: { registerSearchProvider: (provider) => registered.push(provider) },
   }
   const values = {
@@ -656,4 +659,28 @@ test('a degraded single-backend result still honors the per-host cap', async () 
   const result = await provider.search({ query: 'degraded host cap', maxResults: 8 }, new AbortController().signal)
   const sameHost = result.sources.filter((source) => new URL(source.url).hostname === 'same.example')
   assert.ok(sameHost.length <= 2, `expected at most 2 same-host sources, got ${sameHost.length}`)
+})
+
+// ── v0.4.0 packaging / selection regression guards ─────────────────────────
+
+test('the bundle patch no longer pins a static web.searchProvider row', async () => {
+  const yaml = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+
+  // The runtime takeover is the only selection mechanism now; a static pin
+  // would be overridden by the user layer and leave a dangling reference after
+  // uninstall, which is exactly what P0-1 removed.
+  assert.doesNotMatch(yaml, /^\s*-\s*id:\s*web\s*$/m, 'no static `- id: web` patch row')
+  assert.doesNotMatch(yaml, /^\s*searchProvider:/m, 'no static searchProvider pin')
+  assert.match(yaml, /web-search-serper/, 'the insert row still mounts the plugin')
+})
+
+test('Config keeps the shipped defaults and honours a persisted one-shot marker', () => {
+  const defaults = Config({})
+  assert.equal(defaults.cacheMinutes.get(), 5)
+  assert.equal(defaults.takeOverProvider.get(), true)
+
+  // What the takeover wrote into the profile patch on the previous start; the
+  // loader parses it through this same schema before apply() reads it.
+  const persisted = Config({ takeOverProvider: false })
+  assert.equal(persisted.takeOverProvider.get(), false)
 })

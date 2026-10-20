@@ -1,11 +1,17 @@
 # The dsh-serper-search bundle patch: mounts the serper.dev search provider
-# alongside the profile's bundles and points the web seam at it.
+# alongside the profile's bundles. There is no static `- id: web` pin any more:
+# on the first start that finds `web.searchProvider` unset (or still on the
+# deployment default) the plugin pins `searchProvider: serper` into the profile's
+# own cordis.patch.yml, then records `takeOverProvider: false` in its own entry
+# so a later reset is never re-taken over. The pin is written with the whole
+# `web` config, so `fetchProvider: http` from dsh-base is frozen alongside it.
 #
-# The `web` row's whole `config` is replaced (patch semantics), so
-# `fetchProvider: http` from dsh-base is restated here. To switch search back
-# to DeepSeek native search, set `searchProvider: deepseek-official` in the
-# profile's own cordis.patch.yml (it applies after every bundle) or remove
-# this bundle from the profile's package.json.
+# Switching back: use the plugin's "restore deployment default" action (it
+# unsets `searchProvider` in the profile's own cordis.patch.yml), or hand-delete
+# the `searchProvider` line (or the whole `- id: web` entry) there. Do that
+# BEFORE removing this bundle: the pin lives in the user's own patch, so
+# removing the bundle first leaves DSH failing with `provider "serper" is not
+# registered` until that line is deleted.
 #
 # API key: stored outside config — add `SERPER_API_KEY: <key>` under `refs:`
 # in ~/.dsh/.credentials.yaml (or export SERPER_API_KEY in the launching
@@ -23,8 +29,3 @@
 - insert:
     - id: web-search-serper
       name: 'dsh-serper-search'
-
-- id: web
-  config:
-    searchProvider: serper
-    fetchProvider: http

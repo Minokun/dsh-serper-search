@@ -1,7 +1,7 @@
 {
   "name": "dsh-serper-search",
-  "version": "0.3.4",
-  "description": "Merged web search for the DeepSeek Harness: DeepSeek Search API (primary) + serper.dev Google results (secondary), interleaved by a fixed ratio and registered as one provider on the ctx.web seam so the built-in web_search tool serves both at once.",
+  "version": "0.4.0",
+  "description": "Merged, cached, health-aware web search for the DeepSeek Harness: DeepSeek Search API (primary) + serper.dev Google results (secondary), interleaved by a fixed ratio and registered as one provider on the ctx.web seam so the built-in web_search tool serves both at once; results are cached for five minutes, a failing backend cools down with a one-line Note, and the settings card probes both backends, checks npm for updates and can switch the active provider.",
   "license": "MIT",
   "author": "Minokun",
   "repository": {
@@ -38,9 +38,15 @@
     }
   },
   "files": [
-    "lib",
+    "lib/index.js",
+    "lib/client.js",
+    "lib/merge.js",
+    "lib/cache.js",
+    "lib/failure.js",
+    "lib/routes.js",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsdown && node scripts/check-client-id.mjs",
@@ -49,7 +55,7 @@
     "typecheck": "tsc --noEmit",
     "link-harness": "sh scripts/link-harness.sh",
     "release": "sh scripts/release.sh",
-    "test": "node --test tests/merged-search.test.mjs",
+    "test": "node --test \"tests/**/*.test.mjs\"",
     "sync-preset-cap": "node scripts/sync-dsh-preset-cap.mjs"
   },
   "keywords": [

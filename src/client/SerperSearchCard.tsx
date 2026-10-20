@@ -15,6 +15,7 @@ import {
   type SettingsFormShell,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SerperSearchLocaleKey } from './locale.ts'
+import { RuntimePanel } from './runtime-panel.tsx'
 
 /** The card's snapshot: the shared form shell plus one state per control. */
 export interface SerperSearchCardState extends SettingsFormShell {
@@ -171,6 +172,7 @@ export function SerperSearchCard(props: SerperSearchCardProps): ReactNode {
           props.resetField('native')
         }}
       />
+      <RuntimePanel t={t} />
     </SettingsForm>
   )
 }
