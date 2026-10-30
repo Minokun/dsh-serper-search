@@ -1,7 +1,7 @@
 {
   "name": "dsh-serper-search",
-  "version": "0.4.0",
-  "description": "Merged, cached, health-aware web search for the DeepSeek Harness: DeepSeek Search API (primary) + serper.dev Google results (secondary), interleaved by a fixed ratio and registered as one provider on the ctx.web seam so the built-in web_search tool serves both at once; results are cached for five minutes, a failing backend cools down with a one-line Note, and the settings card probes both backends, checks npm for updates and can switch the active provider.",
+  "version": "0.5.0",
+  "description": "Merged, cached, health-aware web search for the DeepSeek Harness: DeepSeek Search API (primary) + serper.dev Google results (secondary) + opt-in Tencent Cloud Yuanbao Search / WSA SearchPro (third lane), interleaved by a fixed slot pattern and registered as one provider on the ctx.web seam so the built-in web_search tool serves all of them at once; results are cached for five minutes, a failing backend cools down with a one-line Note, and the settings card probes every enabled backend, checks npm for updates and can switch the active provider.",
   "license": "MIT",
   "author": "Minokun",
   "repository": {
@@ -40,6 +40,8 @@
   "files": [
     "lib/index.js",
     "lib/client.js",
+    "lib/http.js",
+    "lib/yuanbao.js",
     "lib/merge.js",
     "lib/cache.js",
     "lib/failure.js",
@@ -63,7 +65,10 @@
     "deepseek-harness",
     "deepseek-search-api",
     "serper",
-    "web-search"
+    "web-search",
+    "yuanbao",
+    "tencent-cloud",
+    "wsa-search"
   ],
   "packageManager": "pnpm@11.7.0+sha512.9b7fdd1577a1b99015ea3c3f53b96d072d99c8e035e5e0209b350b3c6e99b4e9668b8b48eb2b0f4b6b2b2c1c1b98c97d42d3e9d0e70e6b0b163b1e6fd0e2b7b1",
   "devDependencies": {

@@ -1,16 +1,16 @@
 # dsh-serper-search
 
-DeepSeek **Search API**（官方自研搜索引擎）+ [serper.dev](https://serper.dev)（Google 搜索）双擎互补的搜索插件，接入 DeepSeek Harness 的 web 能力缝（`ctx.web`）。安装后，DSH 内置的 `web_search` 每次只发两次直连检索请求（`native:true` 且两路可用时；单路缺 key 或 `native:false` 时只发一次，无辅助模型调用），结果按 URL 去重后以 **固定比例交错**（默认 2:1）合并，让模型同时拿到 DeepSeek 自有索引与 Google 索引。
+DeepSeek **Search API**（官方自研搜索引擎）+ [serper.dev](https://serper.dev)（Google 搜索）双擎互补，并可选接入腾讯云**元宝搜索**（WSA SearchPro）作为第三路，接入 DeepSeek Harness 的 web 能力缝（`ctx.web`）。安装后，DSH 内置的 `web_search` 每次发 1~3 次直连检索请求（`native:true` 且各路可用时两路；`yuanbaoEnabled: true` 时三路；缺 key 或 `native:false` 时相应减少，均无辅助模型调用），结果按 URL 去重、再过质量规则，以**固定比例交错**（两路默认 2:1；三路 `'1:1:1'`）合并，让模型同时拿到 DeepSeek 自有索引、Google 索引与元宝的官方长尾页。
 
 > 为什么互补：实测同一组 query 下，DeepSeek Search API 与 Google 的结果 URL 重叠仅 **1.3%**（同后端重复调用噪声地板 43%–100%，故为真实索引差异）。DeepSeek 侧更快、更贴中文，Google 侧覆盖面更广，两者互补而不互相替代。
 >
 > v3 不再调用 DeepSeek 原生 Messages 搜索（旧版那一半每次要一整轮模型调用 5.3s / 0.019 元，且返回的是无摘要裸链接）。
 
-**v0.4.0 起**：成功结果默认缓存 5 分钟（同一 query 重复搜索 0 上游请求）、单路失败按类型冷却并在降级时给模型一行 `Note:`、设置页多出「测试双路 / 检查更新 / 设为本机默认搜索 / 恢复部署默认」四个按钮；**安装后不再需要手改 `cordis.patch.yml`**——首次启动会自动把 `searchProvider` 指向本插件（写入位置与撤销方式见[卸载与恢复](#卸载与恢复)）。
+**v0.4.0 起**：成功结果默认缓存 5 分钟（同一 query 重复搜索 0 上游请求）、单路失败按类型冷却并在降级时给模型一行 `Note:`、设置页多出「测试各路 / 检查更新 / 设为本机默认搜索 / 恢复部署默认」四个按钮；**v0.5.0 起**设置页改成「三个搜索源各自一组」（各组独立开关 / 凭据 / 参数，见 [GUI 设置页](#gui-设置页)），并支持三路 `8 + 8 + 8`（`searchMaxResults: 24`）；**安装后不再需要手改 `cordis.patch.yml`**——首次启动会自动把 `searchProvider` 指向本插件（写入位置与撤销方式见[卸载与恢复](#卸载与恢复)）。
 
 ## 截图
 
-![设置页：测试双路的结果行](https://raw.githubusercontent.com/Minokun/dsh-serper-search/main/assets/shot-settings.png)
+![设置页：测试各路的结果行](https://raw.githubusercontent.com/Minokun/dsh-serper-search/main/assets/shot-settings.png)
 
 ![一次真实搜索：双路合并后的 8 条来源](https://raw.githubusercontent.com/Minokun/dsh-serper-search/main/assets/shot-merged.png)
 
@@ -28,7 +28,7 @@ Agent 可以按下面五步执行（这也是本节存在的意义：把「装�
 2. 配 key（没有 serper key 也能装，只是退化为官方单路）：`~/.dsh/.credentials.yaml` 的 `refs:` 下加 `SERPER_API_KEY: <key>` 与 `DEEPSEEK_API_KEY: <key>`；
 3. 重启 `dsh web`（**首次启动会写 pin**），再确认：`dsh --profile web --dump-config | grep -A4 "^- id: web$"`，应看到 `searchProvider: serper`；
 4. 新会话调用一次 `web_search`，确认返回 ≥1 条来源；日志（前缀 `web-search-serper:`）里应有 `merged=` 与 `cache=store`；
-5. 「测试双路」是 GUI 里的按钮（`POST /api/dsh-serper-search/probe`）：打开 **设置 → 插件 → dsh-serper-search** 点一下，把两行结果（`1234ms · 3`）或错误分类贴回来。Agent 若不能操作浏览器，第 4 步的真实搜索就是验收。
+5. 「测试各路」是 GUI 里的按钮（`POST /api/dsh-serper-search/probe`）：打开 **设置 → 插件 → dsh-serper-search** 点一下，把结果行（`1234ms · 3`）或错误分类贴回来。Agent 若不能操作浏览器，第 4 步的真实搜索就是验收。
 
 人工验收同样适用：装 → 搜 → 点自检，三步内跑通。若第 4 步结果里出现 `Note: serper auth failed ...`，说明 serper key 没配好——在卡片里补填或改 key 后**冷却立即清除**，不需要等冷却到期（auth/quota 10 分钟、rate-limit/server 60 秒、timeout/network 30 秒）。
 
@@ -97,13 +97,29 @@ dsh plugin --profile web add dsh-serper-search
 
 ## GUI 设置页
 
-**Plugins → dsh-serper-search** bundle 详情页提供基础配置：serper API key（写入 credentials 域，不落设置文件）、接口地址、`gl`、`hl`、每次结果数、是否合并 DeepSeek Search API（`native`）。
+**Plugins → dsh-serper-search** bundle 详情页是一个表单，按**三个搜索源分成三组**（同一张表单、同一次「保存」覆盖三组）：
+
+| 组 | 组内开关 | 组内凭据（各自独立的引用与状态徽标） | 组内参数 |
+|---|---|---|---|
+| **DeepSeek 搜索（Search API）** | `native` | `deepseekApiKeyEnv`（默认 `DEEPSEEK_API_KEY`） | `deepseekBaseURL`、`deepseekCount`、`summaryMaxChars`、`deepseekTimeoutMs` |
+| **serper / Google** | `serperEnabled` | `apiKeyEnv`（默认 `SERPER_API_KEY`） | `baseURL`、`gl`、`hl`、`num`、`serperTimeoutMs` |
+| **元宝搜索（腾讯云 WSA）** | `yuanbaoEnabled` | `yuanbaoApiKeyEnv`（默认 `YUANBAO_API_KEY`） | `yuanbaoEndpoint`、`yuanbaoCnt`（0=自动）、`yuanbaoTimeoutMs` |
+
+三个凭据框彼此独立：各自按本组的引用名向 credentials 域查询「已配置/未配置」、各自 `set` 写入、改本组引用只刷新本组状态。开关留空 = 继承上层配置，`true`/`false` 显式生效（UI 上每组都有「留空表示继承上层配置」的提示）。所有密钥只走 DSH credentials（`SERPER_API_KEY` / `DEEPSEEK_API_KEY` / `YUANBAO_API_KEY`），卡片与 README 都不放明文 key。
+
+每个凭据框下面还有一条**「还没有 API Key？」的官方入口外链**（新标签页打开，纯链接、不用配置）：
+
+| 平台 | 入口 | 一句话说明 |
+|---|---|---|
+| DeepSeek | <https://platform.deepseek.com/api_keys> | 创建 API Key；充值与用量在费用中心 |
+| serper | <https://serper.dev/dashboard> | 注册后在 Dashboard 取 key，含免费额度 |
+| 元宝（腾讯云 WSA） | <https://console.cloud.tencent.com/wsapi> | 控制台开通「联网搜索 WSA」；可领每月 2000 次免费额度 |
 
 卡片底部是 0.4.0 新增的运行时面板，四个按钮：
 
 | 按钮 | 做什么 | 说明 |
 |---|---|---|
-| **测试双路** | 并行探测两路，各发 1 次真实请求（每路 3 条） | 成功显示 `1234ms · 3`；失败显示分类 + HTTP 状态（如 `auth (HTTP 401)`）。两路都成功才显示「两路均正常」。**每次消耗 1 次 serper + 1 次 DeepSeek 搜索**；并发点击共享同一次探测（单飞），两路各自的请求预算临时置为 8s（并行，最坏约 8s）；探测成功会清该路冷却，失败**不写**冷却 |
+| **测试各路** | 并行探测每个**已启用**的后端，各发 1 次真实请求（每路 3 条；元宝关闭时只回一行 `disabled`、不发请求） | 成功显示 `1234ms · 3`；失败显示分类 + HTTP 状态（如 `auth (HTTP 401)`）。所有已启用的后端都成功才显示「所有启用的后端均正常」。**每次消耗每路 1 次搜索**（两路 = 1 次 serper + 1 次 DeepSeek；三路再加 1 次元宝）；并发点击共享同一次探测（单飞），各路请求预算临时置为 8s（并行，最坏约 8s）；探测成功会清该路冷却，失败**不写**冷却 |
 | **检查更新** | 由部署端读 `registry.npmjs.org`，与本机版本比 semver | 结果显示「已是最新」或 `有新版本 0.3.4 → 0.4.0 · npm`（链接可点）；结果缓存 10 分钟；不走浏览器，无 CORS；**不做一键升级**（会破坏 `link:` 开发安装） |
 | **设为本机默认搜索** | 写 `searchProvider: serper`（并写一次性标记） | 立即生效，无需重启 |
 | **恢复部署默认** | `{op:'unset'}` 清掉 pin（并写一次性标记） | 清掉后重启也不会被重新接管 |
@@ -112,7 +128,7 @@ dsh plugin --profile web add dsh-serper-search
 - 部署缺少 `webServer` / `connection` / `settings` 任一服务时，插件不注册这三条路由，面板显示「当前部署未提供自检接口」；
 - 三条路由都是 POST-only、走 DSH 自带的 connection fence（Host/Origin + 登录 cookie）；只有 `/provider` 读请求体（JSON 对象，仅接受 `{action:"take"}` / `{action:"release"}`；上限 64 KiB，超限 413、坏 JSON 或非法 action 400 且不写设置），响应里不含任何凭据。
 
-`ratio`、`primary`、`summaryMaxChars`、`*TimeoutMs`、`autoLocale`、`minAuthority`、`maxRetries`、`cacheMinutes` 等**高级项不进 GUI**，通过 profile 的 `cordis.patch.yml` 覆盖：
+`ratio`、`primary`、`autoLocale`、`minAuthority`、`maxRetries`、`cacheMinutes`、`maxPerHost`、`demoteSocial` 等**高级项不进 GUI**，通过 profile 的 `cordis.patch.yml` 覆盖：
 
 ```yaml
 - id: web-search-serper
@@ -136,37 +152,44 @@ dsh plugin --profile web add dsh-serper-search
 | `autoLocale` | `true` | 纯英文 query 自动切 `gl=us, hl=en` |
 | `num` | `10` | serper 每次请求条数下限（1–100） |
 | `serperTimeoutMs` | `4500` | serper 单路超时（冷态折中值） |
+| `serperEnabled` | `true` | serper 这一路的开关；`false` = 不请求 serper（可与元宝组成「DeepSeek + 元宝」两路）。GUI 里就是 serper 组的「启用 serper（Google）」 |
 | `deepseekApiKey` / `deepseekApiKeyEnv` | — / `DEEPSEEK_API_KEY` | 官方 API key 或凭据引用 |
 | `deepseekBaseURL` | `https://api.deepseek.com/v1/tools` | 可用 `DEEPSEEK_SEARCH_API_BASE_URL` 覆盖 |
 | `deepseekCount` | `10` | 官方每次请求条数下限（1–50） |
 | `deepseekTimeoutMs` | `4500` | 官方单路超时的硬 deadline：首次请求 + 重试退避共用这一预算，单次搜索总耗时 ≤ `timeoutMs` |
 | `summaryMaxChars` | `600` | 官方 `summary` 注入 `snippet` 的最大字符数；`0` 关闭 |
 | `primary` | `deepseek` | 主导路（决定交错前排与去重保留优先级） |
-| `ratio` | `2` | 槽位比例，五档白名单 `1 / 1.5 / 2 / 3 / 4` |
+| `ratio` | `2` | 槽位交错比例。两路模式：`1 / 1.5 / 2 / 3 / 4`（白名单）；三路模式（`yuanbaoEnabled: true`）：`'1:1:1'`（默认，8+8+8）或 `'2:1:1'`。三路模式下填数字会被当作 `'1:1:1'`，不会把第三路挤出交错 |
 | `minAuthority` | `-1` | 官方结果 authority 下限（`-1` 不过滤） |
 | `maxPerHost` | `2` | 单域名最多占几条（0 = 不限制）；保持来源多样性 |
 | `demoteSocial` | `true` | reddit / x.com / HN / YouTube 等社交视频源排到编辑类来源之后 |
 | `maxRetries` | `1` | 官方 429/5xx 重试次数 |
 | `logLevel` | `summary` | `off` / `summary` / `verbose` |
-| `native` | `true` | 兼容字段：v3 中含义为「是否合并 DeepSeek Search API」；`false` = 纯 serper |
+| `native` | `true` | DeepSeek 这一路的开关（GUI 文案「启用 DeepSeek 搜索」，字段名保留 `native` 以兼容老配置）；`false` = 不请求官方 Search API。三路全关时搜索会**明确报错**（`no search lane is enabled`），不会静默返回 0 条 |
+| `yuanbaoEnabled` | `false` | 第三路开关：元宝搜索（腾讯云 WSA SearchPro）。打开后每次搜索多一次付费调用（标准版 20 元/千次），并按三元模式交错 |
+| `yuanbaoApiKey` / `yuanbaoApiKeyEnv` | — / `YUANBAO_API_KEY` | WSA 服务 API Key 明文或凭据引用（腾讯云控制台「元宝搜索」页获取） |
+| `yuanbaoEndpoint` | `https://api.wsa.cloud.tencent.com/SearchPro` | 可用环境变量 `YUANBAO_ENDPOINT` 覆盖 |
+| `yuanbaoCnt` | `0` | 单次结果条数；`0` = 由 `maxResults` 推导并向上取整。**合法值只有 10/20/30/40/50**，其余值会被取整后再发（见下节） |
+| `yuanbaoTimeoutMs` | `4500` | 元宝单路超时 |
 | `cacheMinutes` | `5` | 成功结果缓存分钟数（0–5）；`0` 关闭。降级结果的缓存时长取 1/5（不低于 60s），abort 与失败不缓存 |
 | `takeOverProvider` | `true` | `true` = 下次启动允许一次性接管 `searchProvider`；接管判定后插件自动写 `false`。改回 `true` 可再允许一次 |
 | `nativeApiKey` / `nativeApiKeyEnv` / `nativeBaseURL` / `nativeModel` / `nativeMaxUses` | — | v0.2.x 兼容保留：新字段未配置时 key 作为 fallback，其余运行时忽略 |
 
 ## 工作原理
 
-- 注册一个 id 为 `serper` 的复合 `WebSearchProvider`（id 保持兼容，现有 profile 无需改配置），内部两路**直连 HTTP**后端并行：
+- 注册一个 id 为 `serper` 的复合 `WebSearchProvider`（id 保持兼容，现有 profile 无需改配置），内部按配置并行 1~3 路**直连 HTTP**后端（第 3 路默认关闭）：
   - **DeepSeek Search API（主路）**：`POST ${deepseekBaseURL}/search`（默认 `https://api.deepseek.com/v1/tools/search`），鉴权为 `Authorization: Bearer <DEEPSEEK_API_KEY>`；若是 DeepSeek Account 路由会话则改发 `x-dsh-auth-token`（与 DSH 内置 provider 一致）；
-  - **serper.dev（副路）**：`POST ${baseURL}/search`，请求头 `X-API-KEY`，body `{q, gl, hl, num}`；`answerBox` 直接答案映射为结果级 `content`。
+  - **serper.dev（副路）**：`POST ${baseURL}/search`，请求头 `X-API-KEY`，body `{q, gl, hl, num}`；`answerBox` 直接答案映射为结果级 `content`；
+  - **元宝搜索（第三路，v0.5.0，默认关闭）**：`POST ${yuanbaoEndpoint}`（默认 `https://api.wsa.cloud.tencent.com/SearchPro`），`Authorization: Bearer <WSA 服务 key>`，body `{Query, Cnt, Site?}`；`Response.Pages` 是**JSON 字符串数组**，每条要二次 `JSON.parse`，`title/url/passage/date` 映射为 `title/url/snippet/publishedAt`（用 `passage`，不用更长的 `content`——实测 20 题里用 `content` 反而让单次问答命中从 6/8 掉到 5/8）；`RequestId` 只进日志不进结果。
 - 映射增强：
   - 官方 `summary`（实测均长 1893 字符）折叠空白后截断到 `summaryMaxChars`（默认 600）写入 `snippet`，把官方内置插件丢弃的长摘要捡回来；设 `0` 则回退原始短 snippet（231 字符）；
   - 官方 `date` → `publishedAt`；serper 中文日期（`2026年8月13日`）→ ISO；
   - 官方 `authority` 支持 `minAuthority` 过滤（保留 `-1` 未知站点）；
   - 纯英文/代码 query（`autoLocale` 默认开启、`gl=cn` 时）自动切到 `gl=us, hl=en`：实测英文 query 延迟从 3.6–10.5s 降到 1.0–1.7s。
 - 合并：按归一化 URL 去重（去 fragment / `utm_*` / `spm_*` / 百度百科等追踪参数；`chapter`、`channel`、`from=20` 等业务参数不误删）→ **v3.1 质量规则**（单域名最多 `maxPerHost: 2` 条、同页 `/de/` `/fr/` 本地化变体折叠、reddit/x.com/HN/YouTube 等社交视频源降权到编辑类来源之后）→ 按固定比例模式交错 → 截到 `maxResults`（工具层默认 8/12）→ 返回 `truncated: false`（单 query 时避免工具给模型追加 "Refine the query for more" 诱导重搜的尾注；多 query 时工具层轮转仍可能自行追加，插件无法控制）。
-- 降级：任一路失败/超时/缺 key，另一路独立成答；两路都失败才报错。每路独立超时（官方 4500ms / serper 4500ms，重试与首次请求共享同一预算），官方 429/5xx 有 1s→2s 指数退避重试；超时/取消覆盖到响应体读取阶段。降级时 `content` 顶部会多一行模型可见的 `Note:`（见下），UI 卡片会把 `content` 当作答案显示，所以这行也会出现在界面上——已知且接受。
-- **结果缓存（v0.4.0）**：成功结果进 50 条 LRU，默认 5 分钟（`cacheMinutes`，`0` 关闭）。键覆盖所有影响输出的设置（query / maxResults / `primary` / `ratio` / `maxPerHost` / `demoteSocial` / `gl` / `hl` / `autoLocale` / `num` / `native` / `deepseekCount` / `summaryMaxChars` / `minAuthority` / `serper.baseURL` / `deepseek.baseURL`），命中时 **0 上游请求**并在日志打 `cache=hit len=N`；未命中打完请求后打 `cache=store`。降级结果只缓存 `max(60s, TTL/5)`，避免把"暂时坏掉的一路"钉住 5 分钟；冷却被清除（改 key、探测成功等）时缓存一并失效，abort 与失败永不入缓存。
-- **失败分类与冷却（v0.4.0）**：非 2xx / 超时 / 网络错误先分类再决定是否静音该路；某路冷却期间由另一路成答，`content` 顶部加一行 `Note:`，日志打 `cooldown <lane>=<class> until=+Ns fp=xxxxxxxxxxxx`。两路同时冷却时 **fail-open** 仍请求两路（宁可慢，也不让搜索彻底不可用）。
+- 降级：任一路失败/超时/缺 key，其余路独立成答（三路时同样适用：两路降级到一路也可用）；**全部启用的路都失败才报错**，错误里列出每一路的失败分类与原因。每路独立超时（官方 4500ms / serper 4500ms，重试与首次请求共享同一预算），官方 429/5xx 有 1s→2s 指数退避重试；超时/取消覆盖到响应体读取阶段。降级时 `content` 顶部会多一行模型可见的 `Note:`（见下），UI 卡片会把 `content` 当作答案显示，所以这行也会出现在界面上——已知且接受。
+- **结果缓存（v0.4.0）**：成功结果进 50 条 LRU，默认 5 分钟（`cacheMinutes`，`0` 关闭）。键覆盖所有影响输出的设置（query / maxResults / `primary` / `ratio` / `maxPerHost` / `demoteSocial` / `gl` / `hl` / `autoLocale` / `num` / `native` / `deepseekCount` / `summaryMaxChars` / `minAuthority` / `serper.baseURL` / `deepseek.baseURL` / `serperEnabled` / `yuanbaoEnabled` / `yuanbaoEndpoint` / `yuanbaoCnt` / 交错 pattern / 启用的 lane 集合），命中时 **0 上游请求**，日志 `cache=hit`并在日志打 `cache=hit len=N`；未命中打完请求后打 `cache=store`。降级结果只缓存 `max(60s, TTL/5)`，避免把"暂时坏掉的一路"钉住 5 分钟；冷却被清除（改 key、探测成功等）时缓存一并失效，abort 与失败永不入缓存。
+- **失败分类与冷却（v0.4.0）**：非 2xx / 超时 / 网络错误先分类再决定是否静音该路；某路冷却期间由其余路成答，`content` 顶部加一行 `Note:`，日志打 `cooldown <lane>=<class> until=+Ns fp=xxxxxxxxxxxx`。全部启用路同时冷却时 **fail-open** 仍请求它们（宁可慢，也不让搜索彻底不可用）。
 
 | 分类 | 触发 | 冷却 |
 |---|---|---|
@@ -179,7 +202,7 @@ dsh plugin --profile web add dsh-serper-search
 | `invalid-response` | JSON 解析失败 / 结构不符 / 表外 4xx | 不冷却 |
 | `empty` | 200 但 0 条 sources | 不冷却 |
 
-冷却在**成功**、**配置指纹变化**（字面 key / `apiKeyEnv` / `baseURL` 任一变化）、**`credentials/reference-updated` 事件**（在卡片里改 key、补填缺失 key 走这条）、**探测成功**（「测试双路」）或**到期**时清除。降级 Note 形如：
+冷却在**成功**、**配置指纹变化**（字面 key / `apiKeyEnv` / `baseURL` 任一变化）、**`credentials/reference-updated` 事件**（在卡片里改 key、补填缺失 key 走这条）、**探测成功**（「测试各路」）或**到期**时清除。降级 Note 形如：
 
 ```text
 Note: serper auth failed (HTTP 401), using deepseek.
@@ -202,7 +225,7 @@ Note: deepseek quota exhausted, using serper.
 ```
 
 **Q：为什么只有一半来源，或者结果顶上有一行 `Note:`？**
-那一路失败了（key 错、额度用尽、超时、网络），另一路单独成答并在 `content` 顶部加了说明。修好之后冷却会立即清除：在卡片里改/补 key 触发 `credentials/reference-updated`；或点「测试双路」探测成功；或等冷却到期（auth/quota 10 分钟、rate-limit/server 60 秒、timeout/network 30 秒）。
+那一路失败了（key 错、额度用尽、超时、网络），另一路单独成答并在 `content` 顶部加了说明。修好之后冷却会立即清除：在卡片里改/补 key 触发 `credentials/reference-updated`；或点「测试各路」探测成功；或等冷却到期（auth/quota 10 分钟、rate-limit/server 60 秒、timeout/network 30 秒）。
 
 **Q：重复搜同一个 query，结果一模一样而且很快？**
 命中了结果缓存（默认 5 分钟）。要每次都实时检索就设 `cacheMinutes: 0`。降级结果只缓存约 1 分钟，不会把你钉在"半边结果"上。
@@ -255,16 +278,55 @@ node scripts/sync-dsh-preset-cap.mjs 12     # 或 npm run sync-preset-cap -- 12
 - **DSH 升级后重跑一次**，避免 pin 住的旧 preset 缺少新插件；
 - 只支持 `standard` preset；若你在 GUI 切换了其它 preset（ptc / cordis），那边的 `tool-web` 仍是 8 条。
 
-| N | 8 槽位构成 | 每次搜索增量成本 | 适用 |
-|---|---|---|---|
-| 8（默认） | 6 官方 + 2 Google | — | 日常 |
-| 10 | 7 + 3 | 约 +0.3k 上下文 token | 轻微加广 |
-| **12（推荐）** | **8 + 4** | 约 +0.5k token | 调研 |
-| 16 | 11 + 5 | 约 +1k token | 深调研；第 13 名后噪声上升 |
-| 20+ | 14+ + 6+ | +1.5k 以上 | 不建议 |
+| N | 两路构成 | 三路构成（`ratio: '1:1:1'`） | 每次搜索增量成本 | 适用 |
+|---|---|---|---|---|
+| 8（默认） | 6 官方 + 2 Google（`ratio: 2`） | 3 / 3 / 2 | — | 日常 |
+| 10 | 7 + 3（`ratio: 2`） | 4 / 3 / 3 | 约 +0.3k 上下文 token | 轻微加广 |
+| **12（两路推荐）** | **8 + 4（`ratio: 2`）** | 4 / 4 / 4 | 约 +0.5k token | 两路调研 |
+| 16 | 11 + 5（`ratio: 2`）/ 8 + 8（`ratio: 1`） | 6 / 5 / 5 | 约 +1k token | 深调研；第 13 名后噪声上升 |
+| **24（三路推荐）** | 16 + 8（`ratio: 2`）/ **12 + 12（`ratio: 1`）** | **8 / 8 / 8** | 约 +1.5k token | **三路等权：`ratio: '1:1:1'` + `searchMaxResults: 24`**（元宝 8 席对应 `Cnt=30`） |
+| 32+ | — | — | +2k 以上 | 不建议 |
 
-关键事实：**两个搜索 API 都按请求次数计费，`count` 条数不影响单价、也不显著影响延迟**——扩大 N 只增加模型上下文 token，不增加 API 费用。serper 单次最多返回 10 条，N≤20 时副路槽位够用。
+读法：两路的切法由 `ratio` 决定（`ratio: 2` 是 2:1，`ratio: 1` 是 1:1），三路的切法由 `ratio: '1:1:1'` 决定；**默认仍是 8 槽两路**，想跑三路等权就把 `searchMaxResults` 提到 **24**（推荐值），元宝那 8 席会自动把 `Cnt` 从 24 向上取整成 30。
+
+关键事实：**三个搜索 API 都按请求次数计费，`count` 条数不影响单价、也不显著影响延迟**——扩大 N 只增加模型上下文 token，不增加 API 费用（元宝同样按次计费，`Cnt` 10~50 同价）。serper 单次最多返回 10 条，N 超过 20 时 serper 席位会先被抽干（合并层会用其他路的来源补位，不会留空）。
 生效条件：重启 `dsh web`，并且 **agent preset 在 Agent 创建时读取 → 只对新会话生效**（已存在的会话保持旧上限）。不想 pin preset 时，也可以保持默认 8 条，把调研拆成两次搜索（API 费翻倍）。
+
+## 三路合并（v0.5.0：DeepSeek + serper + 元宝搜索）
+
+`yuanbaoEnabled: true` 后，插件把一个 `web.search` 拆成三路各一次请求，按 `ratio` 交错合并。推荐配置（24 槽等权）：
+
+```yaml
+# ~/.dsh/profiles/<profile>/cordis.patch.yml
+- id: web-search-serper
+  config:
+    native: true            # DeepSeek 这一路（字段名保留，GUI 文案是「启用 DeepSeek 搜索」）
+    serperEnabled: true     # serper / Google 这一路
+    yuanbaoEnabled: true    # 元宝第三路
+    ratio: '1:1:1'          # 8 DeepSeek + 8 serper + 8 元宝（24 槽）
+# 并把 preset-standard 的 searchMaxResults 提到 24：
+#   node scripts/sync-dsh-preset-cap.mjs 24
+```
+
+只想要「DeepSeek + 元宝」两路（省掉 serper）时，把 `serperEnabled: false`、`ratio` 留 `'1:1:1'` 即可：合并层会把缺的 S 槽过滤掉，按 12 + 12 交错。
+
+凭据放 `~/.dsh/.credentials.yaml` 的 `refs:` 下（`YUANBAO_API_KEY`），或在 GUI 卡片「元宝搜索」组的凭据框里写入；**不要**把 key 写进 patch 明文。`yuanbaoEnabled` 也可以直接在卡片里打开（对应字段 `true`），三组开关与凭据互不影响。
+
+两个实测坑（都已在适配层处理，写在这里是为了不重复踩）：
+
+1. **`Cnt` 只接受 10 的倍数（10~50）**。传 8/15/60 会返回 **HTTP 200** + `{"Response":{"Error":{"Code":"InvalidParameter","Message":"illegal Cnt"}}}` 且**没有 `Pages`**——只看状态码的客户端会得到一个「永远搜不到东西」的工具。插件按 `ceil(maxResults/10)*10` 取整并夹到 `[10,50]`，24 槽时元宝请求 30 条、客户端再按席位截断。这类错误按 `invalid-response` 记（见下表），不会静默吞掉。
+2. **同域名优先用结构化 `Site` 参数**，不要写内联 `site:`。实测同一条 query 内联写法只有 30% 落在目标域，结构化参数 100%。合并层的去重/质量规则不变：URL 归一化、本地化变体折叠、单域名上限 2 条、社交源降权。
+
+成本与免费额度（这里必须算清，否则「三路贵 2.6 倍」会吓退人）：
+
+- 单价：DeepSeek Search API 5 元/千次 + serper 约 7.2 元/千次 = **两路 0.0122 元/次**；再加元宝标准版 20 元/千次 = **三路 0.0322 元/次**（约 2.6 倍，按调用计费，与返回条数/`Cnt` 无关）。
+- **元宝每月有 2000 次免费额度**。个人日常用量按「每月约 2000 次搜索」估，正好落在免费额度内——也就是说对个人用户，**三路几乎不增加实际支出**（多出来的只是 DeepSeek/serper 那部分既有成本）。额度用满后才按 20 元/千次计费，2000 次 ≈ 40 元的量级。
+- 需要长期跑量的场景再考虑按查询类型分档：`yuanbaoEnabled` 是普通配置项，不同 preset 可以给不同值（例如中文/时效类查询开、英文代码类关）。
+
+另外两个实测事实直接影响接入参数（都已在适配层落地）：
+
+- **摘要字段用 `passage`，不要拼 `content`**：同样 20 题、固定 10 条，`passage` 单次问答命中 6/8，`content`(800) 5/8、`content`(1600) 5/8、`passage+content` 拼接 5/8。元宝服务端已把 `passage` 截到 ~803 字符做过取舍，硬拼反而降准。
+- **`Cnt` 24 槽自动取 30**：`Cnt = clamp(ceil(maxResults/10)*10, 10, 50)`，所以 `searchMaxResults: 24` 时元宝请求 30 条，客户端再按 8 席截断；`yuanbaoCnt` 配 0 即自动，配非 10 倍数也会被取整后再发。
 
 ## 合并质量规则（v3.1，来自两个真实调研会话的复盘）
 
@@ -282,7 +344,8 @@ node scripts/sync-dsh-preset-cap.mjs 12     # 或 npm run sync-preset-cap -- 12
 
 | 方案 | 每次搜索 | 延迟 p50 | 说明 |
 |---|---|---|---|
-| **本插件 v3（官方主 + serper 补）** | **0.0122 元**（官方 0.005 + serper 0.0072） | 1.8–2.9s（serper 决定；英文 query ~1.5s） | 8 条 = 6 官方 + 2 Google |
+| **本插件两路（官方主 + serper 补）** | **0.0122 元**（官方 0.005 + serper 0.0072） | 1.8–2.9s（serper 决定；英文 query ~1.5s） | 8 条 = 6 官方 + 2 Google（`ratio: 2`；`ratio: 1` 时 4 + 4） |
+| **三路（v0.5.0，`1:1:1`）** | **0.0322 元**（官方 0.005 + serper 0.0072 + 元宝 0.02） | 1.8–2.9s（仍由 serper 决定） | 24 条 = 8 官方 + 8 Google + 8 元宝 |
 | 官方 Search API 单飞（内置 provider） | 0.005 元 | 0.34s | 8 条全官方，无 Google 源 |
 | 纯 serper（`native: false`） | 0.0072 元 | 1.9–2.9s | 8 条全 Google |
 | v0.2.2（serper + 原生 Messages） | 0.0263 元 | 5.3s | 8 条里 2 条裸链接 |
@@ -344,9 +407,9 @@ node scripts/verify-live.mjs
 
 ## English
 
-**Merged web search for DeepSeek Harness, v0.4**: one `ctx.web` provider (`serper`) runs two direct HTTP retrievals in parallel — the DeepSeek Search API (`/v1/tools/search`, primary) and serper.dev Google results (secondary) — dedupes by normalized URL, interleaves by a fixed ratio (default 2:1 → six DeepSeek + two Google sources in the tool layer's eight slots), and truncates to `maxResults` with `truncated: false`. No auxiliary model turn: one request per backend, per search.
+**Merged web search for DeepSeek Harness, v0.5**: one `ctx.web` provider (`serper`) runs up to three direct HTTP retrievals in parallel — the DeepSeek Search API (`/v1/tools/search`, primary), serper.dev Google results (secondary), and (opt-in, `yuanbaoEnabled: true`) Tencent Cloud WSA SearchPro / Yuanbao Search — dedupes by normalized URL, interleaves by a fixed slot pattern (default 2:1 → six DeepSeek + two Google in eight slots; `'1:1:1'` at a 24-slot cap → 8/8/8), applies the per-host/social-demotion quality rules, and truncates to `maxResults` with `truncated: false`. No auxiliary model turn: one request per backend, per search. The Yuanbao lane rounds `Cnt` up to a legal 10/20/30/40/50 multiple because the API answers an illegal value with HTTP 200 plus an error envelope and no results at all.
 
-v0.4 adds three behaviours on top of that merge: **result caching** (a 50-entry LRU, five minutes by default, `cacheMinutes: 0` disables it — a repeated query inside the window makes zero upstream requests; a hit logs `cache=hit`), **failure classification with cooldowns** (auth/quota 10 min, rate-limit/server 60 s, timeout/network 30 s; a failed lane is muted while the other answers, and the model-visible `content` gains one `Note:` line such as `Note: serper auth failed (HTTP 401), using deepseek.`), and a **settings self-check** (test both lanes, check npm for updates, pin or release this machine's `searchProvider`). Cooldowns clear on success, on a changed credential fingerprint, on a `credentials/reference-updated` event, on a successful probe, and on expiry; cached results are dropped whenever a cooldown is cleared by an intervention, so a cached degraded answer never outlives the fix. Both lanes cooling is fail-open.
+v0.4 adds three behaviours on top of that merge: **result caching** (a 50-entry LRU, five minutes by default, `cacheMinutes: 0` disables it — a repeated query inside the window makes zero upstream requests; a hit logs `cache=hit`), **failure classification with cooldowns** (auth/quota 10 min, rate-limit/server 60 s, timeout/network 30 s; a failed lane is muted while the other answers, and the model-visible `content` gains one `Note:` line such as `Note: serper auth failed (HTTP 401), using deepseek.`), and a **settings self-check** (test both lanes, check npm for updates, pin or release this machine's `searchProvider`). Cooldowns clear on success, on a changed credential fingerprint, on a `credentials/reference-updated` event, on a successful probe, and on expiry; cached results are dropped whenever a cooldown is cleared by an intervention, so a cached degraded answer never outlives the fix. All enabled lanes cooling is fail-open. **v0.5** adds per-source control and the opt-in Yuanbao lane: the settings card is one form split into three independent groups (DeepSeek Search API / serper / Yuanbao), each with its own enable switch (`native` / `serperEnabled` / `yuanbaoEnabled`), its own credential box (`DEEPSEEK_API_KEY` / `SERPER_API_KEY` / `YUANBAO_API_KEY`, stored in DSH credentials, never in the settings file), and its own parameters. Each credential box is followed by a "no API key yet?" link to the provider's official entry point: <https://platform.deepseek.com/api_keys> (create a DeepSeek key; billing and usage live in the billing centre), <https://serper.dev/dashboard> (sign up for serper.dev, free tier included), and <https://console.cloud.tencent.com/wsapi> (enable Web Search / WSA in the Tencent Cloud console and claim 2,000 free calls per month). `yuanbaoEnabled: true` makes every search a three-way merge (`ratio: '1:1:1'` → 8 DeepSeek + 8 serper + 8 Yuanbao at `searchMaxResults: 24`), with the same dedupe/quality rules, per-lane health, and `Note:` degradation; `Cnt` is always rounded up to a legal 10/20/30/40/50 multiple (24 slots → 30). All lanes disabled is an explicit error, not an empty result.
 
 Install: `dsh plugin --profile web add dsh-serper-search`, add `SERPER_API_KEY` and `DEEPSEEK_API_KEY` under `refs:` in `~/.dsh/.credentials.yaml` (or set them in the launch environment), then restart `dsh web`. **No manual pin is needed any more**: on the first start that finds `web.searchProvider` unset (or still on the deployment default) the plugin writes `searchProvider: serper` into the profile's own `cordis.patch.yml` and records `takeOverProvider: false` in its own entry, so a later reset is never re-taken over. If your user layer already pins another provider, the plugin leaves it alone and logs a warning. Note on the environment: config wins over environment variables in DSH (env is only a fallback), so the automatic pin overrides `$DSH_WEB_SEARCH_PROVIDER`; conversely, an explicitly set `$DSH_WEB_SEARCH_PROVIDER` is treated as an operator decision — the plugin continues the takeover only when it is `serper` (pinning when needed), otherwise it warns, writes just the one-shot marker and leaves the selection alone. Verify with `dsh --profile web --dump-config | grep -A4 "^- id: web$"`.
 
@@ -354,7 +417,7 @@ Uninstall / recovery: the takeover writes `searchProvider: serper` (plus the who
 
 **You do not need to disable or uninstall the built-in search providers.** `ctx.web` registers many providers and uses the one pinned by `searchProvider`; the built-in `deepseek-official` / `deepseek-search-api` providers stay mounted but idle (no calls, no cost). Keep `@deepseek-ai/dsh-tool-web` installed (it owns the `web_search` / `web_fetch` tools) and leave `fetchProvider: http`.
 
-Restart `dsh web`. The GUI card keeps the six basic controls plus the four runtime buttons; advanced settings (`ratio`, `primary`, `summaryMaxChars`, timeouts, `autoLocale`, `minAuthority`, `maxRetries`, `cacheMinutes`) are patched through `cordis.patch.yml`. The per-search source cap (default 8) belongs to `dsh-tool-web.searchMaxResults` inside the agent preset, not to this plugin; `scripts/sync-dsh-preset-cap.mjs 12` regenerates the `preset-standard` override block that raises it to 12 (restart + new session required; API cost is per request, so the cap only changes context tokens).
+Restart `dsh web`. The GUI card is one form with three independent source groups (each: enable switch, credential box, parameters) plus the four runtime buttons; advanced settings (`ratio`, `primary`, `summaryMaxChars`, timeouts, `autoLocale`, `minAuthority`, `maxRetries`, `cacheMinutes`) are patched through `cordis.patch.yml`. The per-search source cap (default 8) belongs to `dsh-tool-web.searchMaxResults` inside the agent preset, not to this plugin; `scripts/sync-dsh-preset-cap.mjs 12` regenerates the `preset-standard` override block that raises it to 12 (restart + new session required; API cost is per request, so the cap only changes context tokens).
 
 Cost: 0.0122 CNY per search (DeepSeek 0.005 + serper ~0.0072), latency dominated by serper (1.8–2.9 s); a repeated query within the cache window costs nothing. If Google coverage is not needed, the built-in `deepseek-search-api` provider is faster (0.34 s) and cheaper; use this plugin only when you want the two indexes merged.
 

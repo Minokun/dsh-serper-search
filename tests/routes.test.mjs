@@ -816,9 +816,12 @@ test('probe overrides both lane timeouts and spends exactly one request per lane
   // maxRetries is 1 in the options; probe forces 0, so a 500 is not retried.
   assert.equal(deepseekFetch.calls.length, 1)
   assert.equal(serperFetch.calls.length, 1)
-  assert.deepEqual(lanes.map((lane) => lane.lane), ['deepseek', 'serper'])
+  // v0.5.0: the third lane always gets a row; disabled means "no request spent".
+  assert.deepEqual(lanes.map((lane) => lane.lane), ['deepseek', 'serper', 'yuanbao'])
   assert.equal(lanes[0].class, 'server')
   assert.equal(lanes[1].class, 'auth')
+  assert.equal(lanes[2].class, 'disabled')
+  assert.equal(lanes[2].ok, false)
 })
 
 test('probe asks each lane for exactly three results on the wire', async () => {
@@ -845,7 +848,7 @@ test('probe timeout is the outer budget (clamped to 1000ms), not each lane\'s de
   const elapsed = Date.now() - started
 
   assert.ok(elapsed >= 900 && elapsed < 3000, `probe took ${elapsed}ms`)
-  assert.deepEqual(lanes.map((lane) => lane.class), ['timeout', 'timeout'])
+  assert.deepEqual(lanes.map((lane) => lane.class), ['timeout', 'timeout', 'disabled'])
   assert.match(lanes[0].error, /1000ms/)
   assert.match(lanes[1].error, /1000ms/)
   assert.equal(deepseekFetch.calls.length, 1)

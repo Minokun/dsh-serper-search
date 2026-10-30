@@ -51,7 +51,7 @@ const RESULT_STYLE: CSSProperties = {
 
 /** One probed lane, as the Host's stable protocol reports it. */
 export interface RuntimeLaneReport {
-  readonly lane: 'deepseek' | 'serper'
+  readonly lane: 'deepseek' | 'serper' | 'yuanbao'
   readonly ok: boolean
   readonly ms: number
   readonly sources: number
@@ -130,7 +130,7 @@ function failureOf(error: unknown): Failure {
 function laneOf(value: unknown): RuntimeLaneReport | undefined {
   if (typeof value !== 'object' || value === null) return undefined
   const lane = value as Record<string, unknown>
-  if (lane.lane !== 'deepseek' && lane.lane !== 'serper') return undefined
+  if (lane.lane !== 'deepseek' && lane.lane !== 'serper' && lane.lane !== 'yuanbao') return undefined
   return {
     lane: lane.lane,
     ok: lane.ok === true,
@@ -149,12 +149,14 @@ function laneOf(value: unknown): RuntimeLaneReport | undefined {
  * @returns the text for that lane.
  */
 function laneLine(lane: RuntimeLaneReport, t: RuntimePanelProps['t']): string {
-  const label = t(lane.lane === 'deepseek' ? 'laneDeepseek' : 'laneSerper')
+  const label = t(lane.lane === 'deepseek' ? 'laneDeepseek' : lane.lane === 'serper' ? 'laneSerper' : 'laneYuanbao')
   if (lane.ok) return `${label}: ${lane.ms}ms · ${lane.sources}`
   // The Host answers `account-only` when the DeepSeek Account service is
   // mounted without an API key; it cannot tell a chat session from a missing
   // sign-in, so the copy is conditional rather than asserting a login.
   if (lane.class === 'account-only') return `${label}: ${t('probeAccountOnly')}`
+  // The third lane is optional: a configured-off lane is reported, not failed.
+  if (lane.class === 'disabled') return `${label}: ${t('probeDisabled')}`
   const http = lane.httpStatus === null ? '' : ` (HTTP ${lane.httpStatus})`
   const detail = lane.error === null ? '' : ` · ${lane.error}`
   return `${label}: ${lane.class ?? 'error'}${http}${detail}`
@@ -229,9 +231,10 @@ export function RuntimePanel({ t }: RuntimePanelProps): ReactNode {
   // The three result regions below stay mounted even when empty: a live region
   // that appears only together with its text is not announced reliably.
   const lanes = probe.lanes ?? []
-  const probeAllOk =
-    lanes.some((lane) => lane.lane === 'deepseek' && lane.ok) &&
-    lanes.some((lane) => lane.lane === 'serper' && lane.ok)
+  // "All good" means every lane that was actually attempted answered: a
+  // configured-off lane is reported as `disabled` and does not fail the check.
+  const attempted = lanes.filter((lane) => lane.class !== 'disabled')
+  const probeAllOk = attempted.length > 0 && attempted.every((lane) => lane.ok)
   const probeLines: string[] =
     probe.phase === 'error'
       ? [probe.failure === 'unsupported' ? t('probeUnsupported') : t('probeFailed')]

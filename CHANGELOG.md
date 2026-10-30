@@ -2,6 +2,44 @@
 
 本文件从 0.4.0 起记录；更早版本的改动见 `git log`（0.3.4 / 0.3.2 / 0.3.1 / 0.3.0）。
 
+## [0.5.0] - 2026-10-21
+
+> 三路合并 + 三组独立设置版本：把腾讯云**元宝搜索（WSA SearchPro）**接成第三路，支持「三路各 8 条 = 合并后 24 条」；设置卡改成三个搜索源各自独立的一组（开关 / 凭据 / 参数），并新增 `serperEnabled` 让 serper 也能单独关闭。第三路默认关闭，老配置行为零变化；**184 项单测全绿**（新增 `tests/yuanbao.test.mjs` 14 项 + `tests/lane-toggles.test.mjs` 7 项）。
+
+### Added
+
+- **第三路：元宝搜索（默认关闭）**。新增 `lib/yuanbao.js`：`POST https://api.wsa.cloud.tencent.com/SearchPro`，`Authorization: Bearer <WSA 服务 key>`，body `{Query, Cnt, Site?}`；`Response.Pages` 是 JSON 字符串数组，逐条二次 `JSON.parse`；`title/url/passage/date` 映射为 `title/url/snippet/publishedAt`（用 `passage`，实测比拼 `content` 更准）。新配置项 `yuanbaoEnabled`（默认 `false`）、`yuanbaoApiKey` / `yuanbaoApiKeyEnv`（默认 `YUANBAO_API_KEY`）、`yuanbaoEndpoint`（默认 SearchPro 端点，可用 `YUANBAO_ENDPOINT` 覆盖）、`yuanbaoCnt`（0 = 按 `maxResults` 推导）、`yuanbaoTimeoutMs`。凭据走 DSH credentials / 启动环境，失败信息只提引用名、不含 key。
+- **`Cnt` 取整护栏**：WSA 的 `Cnt` 只接受 10 的倍数（10~50），传 8/15/60 会返回 **HTTP 200 + `{"Response":{"Error":{"Code":"InvalidParameter","Message":"illegal Cnt"}}}` 且没有 `Pages`**——只看状态码会得到「永远搜不到东西」的工具。适配层按 `ceil(maxResults/10)*10` 取整并夹到 `[10,50]`，24 槽时元宝请求 30 条、客户端按席位截断；`yuanbaoCnt` 配了非法值也会被取整后再发。
+- **N 路合并（`mergeLanes`）**：`lib/merge.js` 新增通用交错器，`lanes = [{name, sources}]` + `pattern`（槽位字母或 lane 名）+ `slotNames` 映射；保留 URL 归一化去重、本地化变体折叠、`maxPerHost`、社交降权与「耗尽一路由下一路补位」的老行为。新增三元比例键 `'1:1:1'`（8+8+8）与 `'2:1:1'`；`mergeSources` / `mergeResults` / `RATIO_PATTERNS` 的旧导出与语义保持不变（现有测试逐条通过）。
+- **三元 `ratio`**：`ratio` 现在接受数字或 `'1:1:1'` / `'2:1:1'`；三路模式下填数字按 `'1:1:1'` 处理（否则数字模式会让第三路永远抢不到槽位）。
+- **元宝进 probe / 设置卡**：`/probe` 返回三条 lane 报告；第三路**仅在 `yuanbaoEnabled` 时**才真的发一次 3 条请求（关闭时回 `class: 'disabled'`，不花钱），三路各自 single-flight、失败只标记不抛。卡片新增「合并元宝搜索」布尔项与「元宝搜索」状态行，`probeOk` 语义改为「所有**已启用**的后端都正常」。
+- **`lib/http.js`**：把 `postJson` / `readJsonBody` / `withTimeout` / `drainBody` / `sleep` / `clampCount` / abort 错误工厂从 `lib/index.js` 抽出来共享（三路复用同一套超时与 abort 语义），`files` 白名单同步加入 `lib/http.js`、`lib/yuanbao.js`。
+- **错误分类支持 `providerClass` 提示**：WSA 用 HTTP 200 回错误信封，`lib/failure.js` 现在优先采纳错误自带的 `providerClass`（auth / quota / rate-limit / server / invalid-response），信封错误因此能和状态码错误一样触发正确的冷却。
+- 测试 `tests/yuanbao.test.mjs`（14 项）：`Cnt` 取整矩阵、Pages 二次解析与去重、信封错误分类、缺 key、24 槽 8/8/8 与三路请求体（DeepSeek `count=24` / serper `num=24` / 元宝 `Cnt=30`）、结构化 `Site`、一路/两路/全路失败降级与 `Note` 文案、`native:false` + 元宝、跨路 host 上限与去重回填、`cacheKey` 覆盖元宝字段。
+
+### Added（第二轮：三组独立设置 + serper 开关）
+
+- **设置卡按搜索源分成三组**：同一张 `SettingsForm`（一次 Save 覆盖全部），用 `<section>` + 标题 + 分隔线划分「DeepSeek 搜索（Search API）」/「serper / Google」/「元宝搜索（腾讯云 WSA）」三块（class 前缀 `plugin-config-serper-search-group-*`）。每组自带开关、独立凭据框和本组参数：DeepSeek 组 `native` + `deepseekApiKeyEnv` + `deepseekBaseURL/deepseekCount/summaryMaxChars/deepseekTimeoutMs`；serper 组 `serperEnabled` + `apiKeyEnv` + `baseURL/gl/hl/num/serperTimeoutMs`；元宝组 `yuanbaoEnabled` + `yuanbaoApiKeyEnv` + `yuanbaoEndpoint/yuanbaoCnt/yuanbaoTimeoutMs`。原先只在 patch 里的 `summaryMaxChars`、各 `*TimeoutMs`、两个 count 与端点也进了 GUI。
+- **三个凭据框彼此独立**：`card-controller` 维护三份 `{ref, configured, writable}`，各自按本组引用名（`apiKeyEnv` / `deepseekApiKeyEnv` / `yuanbaoApiKeyEnv`）向 credentials 域 `describe`/`set`；改某组引用只刷新该组，`credentials/reference-updated` 只刷新引用匹配的那一组；每组有独立的已配置/未配置徽标。
+- **`serperEnabled`（默认 `true`）**：Host 侧新增 lane 开关——`laneBackends()`、probe（关闭的那一路回 `class: 'disabled'` 且不发请求）、`cacheKey`（新增 `se`）、降级 Note 与错误文案都跟着变；`serperEnabled: false` + `native: false` + 元宝关时 `available()` 为 false，搜索抛一条明确错误（`no search lane is enabled (DeepSeek: off, serper: off, Yuanbao: off)`），不会静默返回 0 条。
+- **`native` 语义在 UI 上正名**：字段名保留 `native`（老配置/老测试依赖），卡片文案改为「启用 DeepSeek 搜索」；三个开关的空 draft 都是 `clear`（继承上层），每组 hint 明说「留空表示继承上层配置」。
+- **每组凭据框下的官方入口外链**：三组各自在凭据框正下方渲染一条「还没有 API Key？」的 `<a target="_blank" rel="noopener noreferrer">` 链接（无色、`color: inherit`，交给主题），URL 作为 client 侧常量 `KEY_URLS` 硬编码（不入配置项，注释记录 2026-10-21 的可用性核对）：DeepSeek `https://platform.deepseek.com/api_keys`、serper `https://serper.dev/dashboard`、腾讯云 WSA `https://console.cloud.tencent.com/wsapi`；文案走 locale（`deepseekKeyHelp` / `serperKeyHelp` / `yuanbaoKeyHelp`，中英各一套）。README 的 GUI 段与 English 段各补一张「凭据获取入口」小表。
+- 测试 `tests/lane-toggles.test.mjs`（7 项）：`serperEnabled:false` 的 lane 组装与 12+12 交错、三路全开 8/8/8、全关明确报错且零上游请求、probe 三行（关闭项 `disabled`）、`cacheKey` 随三个开关变化、`primary: serper` 但 serper 关闭时的回退、serper 关闭且元宝失败时的单路降级。
+
+### Changed
+
+- **卡片结构与文案**：`SerperSearchCard` 由平铺字段改为三组分区渲染，新增 `groupDeepseekTitle` / `groupSerperTitle` / `groupYuanbaoTitle` 等中英文 key（旧的单一 `apiKey` 文案拆成三组的 `serperKey` / `deepseekKey` / `yuanbaoKey`）；`lib/client.js` 重新构建（29.65 kB → 42.83 kB）。
+- **README 全面对齐 v0.5**：「来源条数上限」表补 **24 槽**一行（两路 16+8（`ratio: 2`）/ 12+12（`ratio: 1`），三路 8/8/8），并把默认值（8 槽两路）与推荐值（两路 12、三路 24）写清；「三路合并」小节补 `ratio: '1:1:1'` + `searchMaxResults: 24` 的完整示例、`Cnt` 24→30 的取整规则、结构化 `Site`、`passage` 优于 `content` 的实测数字；成本段写清两路 0.0122 → 三路 0.0322 元/次、**元宝每月 2000 次免费额度（个人用量约 2000 次/月，基本落在免费额度内，三路几乎不增加实际支出）**；GUI 段改成三组独立开关/凭据/参数的表格；配置表补 `serperEnabled`、订正 `native` 文案与缓存键清单；English 段同步。
+- **降级语义从「两路都失败才报错」推广为「全部启用的路都失败才报错」**，错误信息逐路列出分类与原因；`clearHealth` / `coolingLanes` / `refreshCooldowns` / 探活协议都泛化到三路（全路同时冷却仍 fail-open）。
+- **缓存键补元宝相关字段**：`yuanbaoEnabled` / `yuanbaoEndpoint` / `yuanbaoCnt` / 交错 `pattern` / 启用 lane 集合——两路缓存结果不会再被三路请求命中（反之亦然）。
+- **`ratio` 文档与配置表**：README「来源条数上限」表补 24 槽（两路 17+7、三路 8/8/8）与 16 槽三路列；新增「三路合并（v0.5.0）」小节，写清 `Cnt` 必须是 10 的倍数、`Site` 用结构化参数（内联 `site:` 实测只有 30% 落域）、三路成本约 0.032 元/次（两路 0.0122 元/次，约 2.6 倍）。
+- **旧文案订正**：去掉「8 条来源 = 6 官方 + 2 Google」这类只在默认 8 槽成立的表述；配置表、缓存键清单、English 段同步到 v0.5。
+- `lib/client.js` 重新构建（含元宝开关与三路状态行；`check-client-id` 门禁通过）。
+
+### Known
+
+- `pnpm typecheck` 在本机会失败，且**改动前就是这样**：安装的 `@deepseek-ai/dsh-client-ui-primitives@0.1.7-rc.2` 发布物里 `lib/types` 缺少 `src/` 中已有的 settings-form 类型（`SettingsForm` / `SettingsFieldState` / …），`tsc` 因此报 15 条 `TS2305` + 1 条 `TS2339`。改动前后错误清单逐条一致（无新增），等 dsh 客户端包升级或本地 `pnpm install` 到类型完整的版本即可恢复；本版本的 CI 门禁仍是 build + `check-client-id`，见 0.4.0 的说明。
+
 ## [0.4.0] - 2026-10-20
 
 > 本轮整改已完成，163 项单测全绿；`package.json` 已升 `0.4.0`。市场截图已随仓库提供（`assets/shot-settings.png` / `assets/shot-merged.png`，由根目录 `screenshots.json` 声明），`browser` 分类 PR 仍需人工提交，见文末「已知待办」。
