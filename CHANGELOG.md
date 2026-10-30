@@ -2,6 +2,18 @@
 
 本文件从 0.4.0 起记录；更早版本的改动见 `git log`（0.3.4 / 0.3.2 / 0.3.1 / 0.3.0）。
 
+## [Unreleased]
+
+### Docs（市场安装预期与脚本可达性）
+
+- **README「安装」段新增「装完你会得到什么」三档表**：澄清市场一键安装拿到的是**默认 8 条两路**（6 官方 + 2 Google），不是 24 条三路；24 条需要 `searchMaxResults: 24` + `yuanbaoEnabled` + `YUANBAO_API_KEY` 三件事，缺件只降级不报错。同时写明市场索引由 `awesome-dsh-plugin` 每日 02:23 UTC 从 npm 重建，发版后最多滞后一天。
+- **修正「来源条数上限」段的脚本可达性**：0.5.0 的 npm tarball 里**没有** `scripts/`（`files` 白名单不含它），所以市场用户照原文 `node scripts/sync-dsh-preset-cap.mjs` 会 `ENOENT`。现在给出两段命令——仓库内直接跑，市场/npm 安装的用一行 `curl` 取同一份脚本（纯文本生成器，不联网），并补上回退方法（删掉标记区即可）。
+- English 段补同样的「默认 8 槽 / 24 槽三件事 / 脚本取法」说明。
+
+### Packaging（随下一次发版生效）
+
+- `package.json` 的 `files` 白名单加入 `scripts/sync-dsh-preset-cap.mjs`，下次发布后 npm 安装即可直接运行包内脚本，无需再 `curl`。
+
 ## [0.5.0] - 2026-10-21
 
 > 三路合并 + 三组独立设置版本：把腾讯云**元宝搜索（WSA SearchPro）**接成第三路，支持「三路各 8 条 = 合并后 24 条」；设置卡改成三个搜索源各自独立的一组（开关 / 凭据 / 参数），并新增 `serperEnabled` 让 serper 也能单独关闭。第三路默认关闭，老配置行为零变化；**184 项单测全绿**（新增 `tests/yuanbao.test.mjs` 14 项 + `tests/lane-toggles.test.mjs` 7 项）。

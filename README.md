@@ -38,7 +38,19 @@ Agent 可以按下面五步执行（这也是本节存在的意义：把「装�
 dsh plugin --profile web add dsh-serper-search
 ```
 
-或打开 **设置 → 插件市场**，搜索 `dsh-serper-search` 一键安装。
+或打开 **设置 → 插件市场**，搜索 `dsh-serper-search` 一键安装。市场里的版本号由社区索引 `awesome-dsh-plugin` 每天 02:23 UTC 从 npm 重建，**刚发版后最多滞后一天**，看到旧版本时刷新即可，不必重装。
+
+### 装完你会得到什么（市场一键安装同样适用）
+
+市场装的是同一个 npm 包，装完 + 重启后插件自动接管 `searchProvider`。但**来源条数上限与第三路开关都不在插件默认值里**，按你配到哪一步，实际效果分三档：
+
+| 你已完成的配置 | `web_search` 实际返回 | 单价 |
+|---|---|---|
+| 装好（DeepSeek key 通常已有） | 8 条，DeepSeek 官方单路 | 0.005 元/次 |
+| + `SERPER_API_KEY` | **8 条 = 6 官方 + 2 Google**（`ratio: 2`） | 0.0122 元/次 |
+| + `searchMaxResults` 提到 24 + 打开元宝路 + `YUANBAO_API_KEY` | 24 条 = 8 官方 / 8 Google / 8 元宝 | 0.0322 元/次 |
+
+**前两档都算「装完就能用」**，第三档才是 24 条三路。缺件时的表现是降级加一行 `Note:`（例如没配 serper key 就退化为官方单路），不会报错、也不会静默返回 0 条；只有三路全部关闭时才明确报错。
 
 1. **配置两个 key**（推荐 credentials 域，GUI 卡片也可填 serper key）：
    - `~/.dsh/.credentials.yaml` 的 `refs:` 下加 `SERPER_API_KEY: <serper key>` 与 `DEEPSEEK_API_KEY: <deepseek key>`（后者通常已有）；
@@ -268,13 +280,19 @@ DSH 的 `ctx.web` 是「多 provider 注册、按配置选一个」。内置的 
 
 `web_search` 一次调用最终保留几条来源，由工具层 `@deepseek-ai/dsh-tool-web` 的 `searchMaxResults` 决定（默认 **8**），而 `tool-web` 是挂在 **agent preset**（默认 `standard`）里的，**不在本插件配置里**——插件只按工具层传入的 `maxResults` 返回结果，无法自行突破。
 
-为什么不能只加一行配置：profile patch 对某个插件的 `config` 是**整体替换**、不能深合并嵌套字段，所以要覆盖整个 `preset-standard`。仓库自带生成脚本（从当前 dsh 的 `--dump-config` 重建覆盖块，写入 profile patch 的标记区）：
+为什么不能只加一行配置：profile patch 对某个插件的 `config` 是**整体替换**、不能深合并嵌套字段，所以要覆盖整个 `preset-standard`。生成脚本在仓库的 `scripts/sync-dsh-preset-cap.mjs`（从当前 dsh 的 `--dump-config` 重建覆盖块，写入 profile patch 的标记区）。**注意：0.5.0 的 npm 包里没有附带这个脚本**（`files` 白名单不含 `scripts/`，下一次发版起会一并打包），所以市场安装的用户用第二段那行 `curl` 取同一份脚本再跑：
 
 ```sh
-node scripts/sync-dsh-preset-cap.mjs 12     # 或 npm run sync-preset-cap -- 12
+# 仓库内（git clone 后）
+node scripts/sync-dsh-preset-cap.mjs 24          # 或 npm run sync-preset-cap -- 24
+
+# 市场 / npm 安装的：取仓库里同一份脚本（纯文本生成，不联网）
+curl -fsSL https://raw.githubusercontent.com/Minokun/dsh-serper-search/main/scripts/sync-dsh-preset-cap.mjs -o /tmp/dsh-cap.mjs
+node /tmp/dsh-cap.mjs 24
 ```
 
 - 脚本会在 `~/.dsh/profiles/web/cordis.patch.yml` 里写入/替换 `# >>> dsh preset-standard override >>>` 标记区（169 行，含完整 preset 插件列表）；
+- 它是纯文本生成器（读 `dsh --dump-config` 的输出、写你自己的 profile patch），不联网、不改 DSH 安装目录；**回退**就是把该标记区整块删掉，插件行为不受影响（它只按工具层传入的 `maxResults` 返回结果）；
 - **DSH 升级后重跑一次**，避免 pin 住的旧 preset 缺少新插件；
 - 只支持 `standard` preset；若你在 GUI 切换了其它 preset（ptc / cordis），那边的 `tool-web` 仍是 8 条。
 
@@ -304,7 +322,7 @@ node scripts/sync-dsh-preset-cap.mjs 12     # 或 npm run sync-preset-cap -- 12
     serperEnabled: true     # serper / Google 这一路
     yuanbaoEnabled: true    # 元宝第三路
     ratio: '1:1:1'          # 8 DeepSeek + 8 serper + 8 元宝（24 槽）
-# 并把 preset-standard 的 searchMaxResults 提到 24：
+# 并把 preset-standard 的 searchMaxResults 提到 24（脚本取法见「来源条数上限」）：
 #   node scripts/sync-dsh-preset-cap.mjs 24
 ```
 
@@ -412,6 +430,8 @@ node scripts/verify-live.mjs
 v0.4 adds three behaviours on top of that merge: **result caching** (a 50-entry LRU, five minutes by default, `cacheMinutes: 0` disables it — a repeated query inside the window makes zero upstream requests; a hit logs `cache=hit`), **failure classification with cooldowns** (auth/quota 10 min, rate-limit/server 60 s, timeout/network 30 s; a failed lane is muted while the other answers, and the model-visible `content` gains one `Note:` line such as `Note: serper auth failed (HTTP 401), using deepseek.`), and a **settings self-check** (test both lanes, check npm for updates, pin or release this machine's `searchProvider`). Cooldowns clear on success, on a changed credential fingerprint, on a `credentials/reference-updated` event, on a successful probe, and on expiry; cached results are dropped whenever a cooldown is cleared by an intervention, so a cached degraded answer never outlives the fix. All enabled lanes cooling is fail-open. **v0.5** adds per-source control and the opt-in Yuanbao lane: the settings card is one form split into three independent groups (DeepSeek Search API / serper / Yuanbao), each with its own enable switch (`native` / `serperEnabled` / `yuanbaoEnabled`), its own credential box (`DEEPSEEK_API_KEY` / `SERPER_API_KEY` / `YUANBAO_API_KEY`, stored in DSH credentials, never in the settings file), and its own parameters. Each credential box is followed by a "no API key yet?" link to the provider's official entry point: <https://platform.deepseek.com/api_keys> (create a DeepSeek key; billing and usage live in the billing centre), <https://serper.dev/dashboard> (sign up for serper.dev, free tier included), and <https://console.cloud.tencent.com/wsapi> (enable Web Search / WSA in the Tencent Cloud console and claim 2,000 free calls per month). `yuanbaoEnabled: true` makes every search a three-way merge (`ratio: '1:1:1'` → 8 DeepSeek + 8 serper + 8 Yuanbao at `searchMaxResults: 24`), with the same dedupe/quality rules, per-lane health, and `Note:` degradation; `Cnt` is always rounded up to a legal 10/20/30/40/50 multiple (24 slots → 30). All lanes disabled is an explicit error, not an empty result.
 
 Install: `dsh plugin --profile web add dsh-serper-search`, add `SERPER_API_KEY` and `DEEPSEEK_API_KEY` under `refs:` in `~/.dsh/.credentials.yaml` (or set them in the launch environment), then restart `dsh web`. **No manual pin is needed any more**: on the first start that finds `web.searchProvider` unset (or still on the deployment default) the plugin writes `searchProvider: serper` into the profile's own `cordis.patch.yml` and records `takeOverProvider: false` in its own entry, so a later reset is never re-taken over. If your user layer already pins another provider, the plugin leaves it alone and logs a warning. Note on the environment: config wins over environment variables in DSH (env is only a fallback), so the automatic pin overrides `$DSH_WEB_SEARCH_PROVIDER`; conversely, an explicitly set `$DSH_WEB_SEARCH_PROVIDER` is treated as an operator decision — the plugin continues the takeover only when it is `serper` (pinning when needed), otherwise it warns, writes just the one-shot marker and leaves the selection alone. Verify with `dsh --profile web --dump-config | grep -A4 "^- id: web$"`.
+
+**Out of the box a market/npm install gives eight slots: six DeepSeek + two Google.** The 24-slot three-way merge is an opt-in tier, and three things are needed: raise `dsh-tool-web.searchMaxResults` (default 8; it lives in the `standard` agent preset, not in this plugin), set `yuanbaoEnabled: true`, and provide `YUANBAO_API_KEY`. Missing pieces degrade with one `Note:` line instead of failing, and only "all lanes disabled" is an explicit error. The npm package of 0.5.0 ships no `scripts/` directory (the next release will); for a market install, fetch the same generator with `curl -fsSL https://raw.githubusercontent.com/Minokun/dsh-serper-search/main/scripts/sync-dsh-preset-cap.mjs -o /tmp/dsh-cap.mjs && node /tmp/dsh-cap.mjs 24`.
 
 Uninstall / recovery: the takeover writes `searchProvider: serper` (plus the whole `web` config, so `fetchProvider: http` is frozen alongside it — value unchanged) into your profile patch. To go back, switch providers in the GUI search settings, or click "restore deployment default" in the plugin card, or hand-delete the `searchProvider` line; none of these is re-taken over thanks to the one-shot marker. Removing the plugin while the pin remains leaves `provider "serper" is not registered` — a known state: delete that line. To re-adopt the plugin, click "use as this machine's default search" or write the pin by hand. Reinstalling after a removal does **not** re-take over when the leftover `takeOverProvider: false` is still in the user patch (the marker survives uninstall): click "use as this machine's default search", or delete that field and restart.
 

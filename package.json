@@ -46,6 +46,7 @@
     "lib/cache.js",
     "lib/failure.js",
     "lib/routes.js",
+    "scripts/sync-dsh-preset-cap.mjs",
     "cordis.patch.yml",
     "README.md",
     "CHANGELOG.md"
