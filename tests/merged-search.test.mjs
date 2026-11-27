@@ -22,7 +22,7 @@ import {
   normalizeSerperDate,
   normalizeUrl,
 } from '../lib/merge.js'
-import { Config, DeepSeekSearchApiBackend, MergedSearchProvider, apply } from '../lib/index.js'
+import { Config, DeepSeekSearchApiBackend, MergedSearchProvider, apply, deepseekQuery } from '../lib/index.js'
 
 /** Build a DeepSeek Search API payload for the given URLs. */
 function deepseekPayload(urls) {
@@ -782,4 +782,33 @@ test("a candidate blocked by maxPerHost does not consume its lane's interleave s
     { pattern: ['P', 'S'], maxResults: 4, maxPerHost: 1 },
   )
   assert.deepEqual(wide.sources.map(tag), ['a1', 'c1', 'd1'])
+})
+
+test('the DeepSeek lane sends a query the Search API accepts: no site: operator, no quote marks', async () => {
+  // The Search API answers HTTP 400 to `site:` and to quoted phrases, which dropped
+  // the primary lane for that whole search (2 real calls); the other lanes still
+  // receive the query exactly as written.
+  assert.equal(deepseekQuery('site:rails.cn/html/news/ "Ruby 4.1" release notes'), 'rails.cn Ruby 4.1 release notes')
+  assert.equal(deepseekQuery('site:support.apple.com/guide/watch/ battery'), 'support.apple.com battery')
+  assert.equal(deepseekQuery('filetype:pdf intitle:report “Q3” 2026'), 'report Q3 2026')
+  assert.equal(deepseekQuery('  plain   query  '), 'plain query')
+  assert.equal(deepseekQuery('site:only.example'), 'only.example')
+
+  // The stub stands in for the endpoint: it answers 400 to anything that still
+  // carries an operator or a quote mark, exactly as the real one did.
+  const sent = []
+  const deepseekFetch = stubFetch((_url, init) => {
+    const query = JSON.parse(init.body).query
+    sent.push(query)
+    return /["“”]|\b(?:site|filetype|intitle|inurl):/i.test(query)
+      ? jsonResponse({ message: 'bad request' }, 400)
+      : jsonResponse(deepseekPayload(A_URLS))
+  })
+  const serperFetch = stubFetch(() => jsonResponse(serperPayload(B_URLS)))
+  const provider = new MergedSearchProvider(() => mergedOptions({ deepseekFetch, serperFetch, overrides: { cacheMinutes: 0 } }))
+
+  const result = await provider.search({ query: 'site:rails.cn/html/news/ "Ruby 4.1" release notes', maxResults: 8 })
+  assert.deepEqual(sent, ['rails.cn Ruby 4.1 release notes'])
+  assert.equal(result.content, undefined, 'the primary lane answered instead of being dropped')
+  assert.ok(composition(result.sources).a > 0, 'DeepSeek sources made it into the merged result')
 })
