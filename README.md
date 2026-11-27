@@ -115,7 +115,7 @@ dsh plugin --profile web add dsh-serper-search
 |---|---|---|---|
 | **DeepSeek 搜索（Search API）** | `native` | `deepseekApiKeyEnv`（默认 `DEEPSEEK_API_KEY`） | `deepseekBaseURL`、`deepseekCount`、`summaryMaxChars`、`deepseekTimeoutMs` |
 | **serper / Google** | `serperEnabled` | `apiKeyEnv`（默认 `SERPER_API_KEY`） | `baseURL`、`gl`、`hl`、`num`、`serperTimeoutMs` |
-| **元宝搜索（腾讯云 WSA）** | `yuanbaoEnabled` | `yuanbaoApiKeyEnv`（默认 `YUANBAO_API_KEY`） | `yuanbaoEndpoint`、`yuanbaoCnt`（0=自动）、`yuanbaoTimeoutMs` |
+| **元宝搜索（腾讯云 WSA）** | `yuanbaoEnabled` | `yuanbaoApiKeyEnv`（默认 `YUANBAO_API_KEY`） | `yuanbaoEndpoint`、`yuanbaoCnt`（0=自动）、`yuanbaoTimeoutMs`、`yuanbaoSnippetMaxChars` |
 
 三个凭据框彼此独立：各自按本组的引用名向 credentials 域查询「已配置/未配置」、各自 `set` 写入、改本组引用只刷新本组状态。开关留空 = 继承上层配置，`true`/`false` 显式生效（UI 上每组都有「留空表示继承上层配置」的提示）。所有密钥只走 DSH credentials（`SERPER_API_KEY` / `DEEPSEEK_API_KEY` / `YUANBAO_API_KEY`），卡片与 README 都不放明文 key。
 
@@ -184,6 +184,7 @@ dsh plugin --profile web add dsh-serper-search
 | `yuanbaoEndpoint` | `https://api.wsa.cloud.tencent.com/SearchPro` | 可用环境变量 `YUANBAO_ENDPOINT` 覆盖 |
 | `yuanbaoCnt` | `0` | 单次结果条数；`0` = 由 `maxResults` 推导并向上取整。**合法值只有 10/20/30/40/50**，其余值会被取整后再发（见下节） |
 | `yuanbaoTimeoutMs` | `4500` | 元宝单路超时 |
+| `yuanbaoSnippetMaxChars` | `1000` | 元宝 `passage` 注入 `snippet` 的最大字符数；`0` = 不截断（原始段落可长达数千字符，CJK 约 1 字 ≈ 1 token）。设置页里是元宝组的「摘要长度」 |
 | `cacheMinutes` | `5` | 成功结果缓存分钟数（0–5）；`0` 关闭。降级结果的缓存时长取 1/5（不低于 60s），abort 与失败不缓存 |
 | `takeOverProvider` | `true` | `true` = 下次启动允许一次性接管 `searchProvider`；接管判定后插件自动写 `false`。改回 `true` 可再允许一次 |
 | `nativeApiKey` / `nativeApiKeyEnv` / `nativeBaseURL` / `nativeModel` / `nativeMaxUses` | — | v0.2.x 兼容保留：新字段未配置时 key 作为 fallback，其余运行时忽略 |
@@ -279,7 +280,7 @@ DSH 的 `ctx.web` 是「多 provider 注册、按配置选一个」。内置的 
 
 ## 来源条数上限（8 → 12/N，为什么不在插件里）
 
-`web_search` 一次调用最终保留几条来源，由工具层 `@deepseek-ai/dsh-tool-web` 的 `searchMaxResults` 决定（默认 **8**），而 `tool-web` 是挂在 **agent preset**（默认 `standard`）里的，**不在本插件配置里**——插件只按工具层传入的 `maxResults` 返回结果，无法自行突破。
+`web_search` 一次调用最终保留几条来源，由工具层 `@deepseek-ai/dsh-tool-web` 的 `searchMaxResults` 决定（默认 **8**；DSH 0.2.2-rc.5 起为 **10**），而 `tool-web` 是挂在 **agent preset**（默认 `standard`）里的，**不在本插件配置里**——插件只按工具层传入的 `maxResults` 返回结果，无法自行突破。
 
 为什么不能只加一行配置：profile patch 对某个插件的 `config` 是**整体替换**、不能深合并嵌套字段，所以要覆盖整个 `preset-standard`。生成脚本在仓库的 `scripts/sync-dsh-preset-cap.mjs`（从当前 dsh 的 `--dump-config` 重建覆盖块，写入 profile patch 的标记区）。**注意：0.5.0 的 npm 包里没有附带这个脚本**（`files` 白名单不含 `scripts/`，下一次发版起会一并打包），所以市场安装的用户用第二段那行 `curl` 取同一份脚本再跑：
 
@@ -306,9 +307,13 @@ node /tmp/dsh-cap.mjs 24
 | **12（两路推荐）** | **8 + 4（`ratio: 2`）** | 4 / 4 / 4 | 约 +0.5k token | 两路调研 |
 | 16 | 11 + 5（`ratio: 2`）/ 8 + 8（`ratio: 1`） | 6 / 5 / 5 | 约 +1k token | 深调研；第 13 名后噪声上升 |
 | **24（三路推荐）** | 16 + 8（`ratio: 2`）/ **12 + 12（`ratio: 1`）** | **8 / 8 / 8** | 约 +1.5k token | **三路等权：`ratio: '1:1:1'` + `searchMaxResults: 24`**（元宝 8 席对应 `Cnt=30`） |
+
+> 表里的「默认」按 8 槽写（DSH ≤ 0.2.1-rc.2 的工具层默认值）；DSH 0.2.2-rc.5 起工具层默认是 **10 槽**，`ratio: 2` 下即 7 + 3，其余读法不变。
+>
+> **token 一列偏乐观，以实测为准**：2026-11 对真实调用的统计（24 槽三路）里，每次调用返回的 snippet 文本中位数约 1.3 万字符、最大 6.2 万，远高于「约 +1.5k token」——当时元宝段落不截断，3.4% 的来源（> 2000 字符）占了 23.9% 的 snippet 文本。现在元宝段落默认截到 `yuanbaoSnippetMaxChars`（1000 字符），长尾已消除；但 CJK 文本约 1 字 ≈ 1 token，24 槽仍应按「数千 token / 次」预估。
 | 32+ | — | — | +2k 以上 | 不建议 |
 
-读法：两路的切法由 `ratio` 决定（`ratio: 2` 是 2:1，`ratio: 1` 是 1:1），三路的切法由 `ratio: '1:1:1'` 决定；**默认仍是 8 槽两路**，想跑三路等权就把 `searchMaxResults` 提到 **24**（推荐值），元宝那 8 席会自动把 `Cnt` 从 24 向上取整成 30。
+读法：两路的切法由 `ratio` 决定（`ratio: 2` 是 2:1，`ratio: 1` 是 1:1），三路的切法由 `ratio: '1:1:1'` 决定；**默认仍是 8 槽两路**（DSH 0.2.2-rc.5 起为 10 槽），想跑三路等权就把 `searchMaxResults` 提到 **24**（推荐值），元宝那 8 席会自动把 `Cnt` 从 24 向上取整成 30。
 
 ### 多 query 调用：`splitMultiQueryBudget`
 
@@ -323,7 +328,7 @@ node /tmp/dsh-cap.mjs 24
 默认关闭：这是对多 query 结果组成方式的有意改变，想省上下文、不想被那句提示带着反复搜索时再打开。
 
 关键事实：**三个搜索 API 都按请求次数计费，`count` 条数不影响单价、也不显著影响延迟**——扩大 N 只增加模型上下文 token，不增加 API 费用（元宝同样按次计费，`Cnt` 10~50 同价）。serper 单次最多返回 10 条，N 超过 20 时 serper 席位会先被抽干（合并层会用其他路的来源补位，不会留空）。
-生效条件：重启 `dsh web`，并且 **agent preset 在 Agent 创建时读取 → 只对新会话生效**（已存在的会话保持旧上限）。不想 pin preset 时，也可以保持默认 8 条，把调研拆成两次搜索（API 费翻倍）。
+生效条件：重启 `dsh web`，并且 **agent preset 在 Agent 创建时读取 → 只对新会话生效**（已存在的会话保持旧上限）。不想 pin preset 时，也可以保持默认条数，把调研拆成两次搜索（API 费翻倍）。
 
 ## 三路合并（v0.5.0：DeepSeek + serper + 元宝搜索）
 
@@ -446,7 +451,7 @@ v0.4 adds three behaviours on top of that merge: **result caching** (a 50-entry 
 
 Install: `dsh plugin --profile web add dsh-serper-search`, add `SERPER_API_KEY` and `DEEPSEEK_API_KEY` under `refs:` in `~/.dsh/.credentials.yaml` (or set them in the launch environment), then restart `dsh web`. **No manual pin is needed any more**: on the first start that finds `web.searchProvider` unset (or still on the deployment default) the plugin writes `searchProvider: serper` into the profile's own `cordis.patch.yml` and records `takeOverProvider: false` in its own entry, so a later reset is never re-taken over. If your user layer already pins another provider, the plugin leaves it alone and logs a warning. Note on the environment: config wins over environment variables in DSH (env is only a fallback), so the automatic pin overrides `$DSH_WEB_SEARCH_PROVIDER`; conversely, an explicitly set `$DSH_WEB_SEARCH_PROVIDER` is treated as an operator decision — the plugin continues the takeover only when it is `serper` (pinning when needed), otherwise it warns, writes just the one-shot marker and leaves the selection alone. Verify with `dsh --profile web --dump-config | grep -A4 "^- id: web$"`.
 
-**Out of the box a market/npm install gives eight slots: six DeepSeek + two Google.** The 24-slot three-way merge is an opt-in tier, and three things are needed: raise `dsh-tool-web.searchMaxResults` (default 8; it lives in the `standard` agent preset, not in this plugin), set `yuanbaoEnabled: true`, and provide `YUANBAO_API_KEY`. Missing pieces degrade with one `Note:` line instead of failing, and only "all lanes disabled" is an explicit error. The npm package of 0.5.0 ships no `scripts/` directory (the next release will); for a market install, fetch the same generator with `curl -fsSL https://raw.githubusercontent.com/Minokun/dsh-serper-search/main/scripts/sync-dsh-preset-cap.mjs -o /tmp/dsh-cap.mjs && node /tmp/dsh-cap.mjs 24`.
+**Out of the box a market/npm install gives the tool layer's default slots: eight on DSH ≤ 0.2.1 (six DeepSeek + two Google), ten since DSH 0.2.2-rc.5 (seven + three).** The 24-slot three-way merge is an opt-in tier, and three things are needed: raise `dsh-tool-web.searchMaxResults` (default 8 on DSH ≤ 0.2.1, 10 since DSH 0.2.2-rc.5; it lives in the `standard` agent preset, not in this plugin), set `yuanbaoEnabled: true`, and provide `YUANBAO_API_KEY`. Missing pieces degrade with one `Note:` line instead of failing, and only "all lanes disabled" is an explicit error. The npm package of 0.5.0 ships no `scripts/` directory (the next release will); for a market install, fetch the same generator with `curl -fsSL https://raw.githubusercontent.com/Minokun/dsh-serper-search/main/scripts/sync-dsh-preset-cap.mjs -o /tmp/dsh-cap.mjs && node /tmp/dsh-cap.mjs 24`.
 
 Uninstall / recovery: the takeover writes `searchProvider: serper` (plus the whole `web` config, so `fetchProvider: http` is frozen alongside it — value unchanged) into your profile patch. To go back, switch providers in the GUI search settings, or click "restore deployment default" in the plugin card, or hand-delete the `searchProvider` line; none of these is re-taken over thanks to the one-shot marker. Removing the plugin while the pin remains leaves `provider "serper" is not registered` — a known state: delete that line. To re-adopt the plugin, click "use as this machine's default search" or write the pin by hand. Reinstalling after a removal does **not** re-take over when the leftover `takeOverProvider: false` is still in the user patch (the marker survives uninstall): click "use as this machine's default search", or delete that field and restart.
 

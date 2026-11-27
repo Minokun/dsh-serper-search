@@ -62,7 +62,7 @@ const DSH_BIN = process.env.DSH_BIN ?? 'dsh'
 
 const HEADER = [
   '# >>> dsh preset-standard override (generated; re-run scripts/sync-dsh-preset-cap.mjs after a DSH upgrade) >>>',
-  `# 目的：把一次 web_search 的来源上限从 tool-web 默认的 8 提升到 ${CAP}。`,
+  `# 目的：把一次 web_search 的来源上限设为 ${CAP}（不写这段时取 tool-web 的默认值：DSH 0.2.2-rc.5 为 10，更早为 8）。`,
   '# 说明：这是 agent preset 的完整覆盖块（patch 对 config 是整体替换），不是插件设置。',
   // Recorded in the block itself, so the deviation from DSH's default is visible where it lives.
   ...(INTERRUPT ? ['# 额外（--interrupt）：tool-subagent-control 的 interrupt 固定为 true；DSH >= 0.2.2-rc.1 默认为 false。'] : []),
