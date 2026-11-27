@@ -299,7 +299,8 @@ test('serper mapping normalizes Chinese dates and surfaces the answer box', () =
   assert.equal(mapped.sources[0].publishedAt, '2026-01-02')
   assert.equal(normalizeSerperDate('2026年8月13日'), '2026-08-13')
   assert.equal(normalizeSerperDate('2026-08-13'), '2026-08-13')
-  assert.equal(normalizeSerperDate('yesterday-ish'), 'yesterday-ish')
+  // Not a date: dropped, never passed through into publishedAt.
+  assert.equal(normalizeSerperDate('yesterday-ish'), undefined)
   assert.equal(normalizeSerperDate(undefined), undefined)
 })
 
@@ -727,4 +728,32 @@ test('serper google.com/goto redirect wrappers are dropped instead of becoming c
     ],
   })
   assert.deepEqual(mapped.sources.map((source) => source.url), ['https://example.com/real', 'https://www.google.com/search?q=dsh'])
+})
+
+test('publishedAt is a real calendar date on every lane: no day shift, no relative or author strings', () => {
+  // Date-only strings used to go through Date.parse (local midnight) and come back
+  // as the previous UTC day: "Jun 23, 2026" → 2026-06-22T16:00:00.000Z under
+  // TZ=Asia/Shanghai (23% of all real sources ended in T16:00:00.000Z).
+  assert.equal(normalizeSerperDate('Jun 23, 2026'), '2026-06-23')
+  assert.equal(normalizeSerperDate('June 23 2026'), '2026-06-23')
+  assert.equal(normalizeSerperDate('23 Jun 2026'), '2026-06-23')
+  assert.equal(normalizeSerperDate('2026/06/23'), '2026-06-23')
+  assert.equal(normalizeSerperDate('2026.06.23'), '2026-06-23')
+  // A full timestamp with its own offset names an instant: kept exactly as given.
+  assert.equal(normalizeSerperDate('2026-01-02T03:04:05+08:00'), '2026-01-02T03:04:05+08:00')
+  // Relative ages resolve against the clock instead of leaking "3 days ago" into publishedAt.
+  const now = Date.parse('2026-11-27T04:00:00Z')
+  assert.equal(normalizeSerperDate('3 days ago', { now }), '2026-11-24')
+  assert.equal(normalizeSerperDate('7天前', { now }), '2026-11-20')
+  assert.equal(normalizeSerperDate('5小时前', { now }), '2026-11-27')
+  assert.equal(normalizeSerperDate('2 years ago', { now }), '2024-11-27')
+  // Not a date: dropped instead of passed through (author names, vague words, impossible days).
+  assert.equal(normalizeSerperDate('by N Sapunov'), undefined)
+  assert.equal(normalizeSerperDate('2026年13月45日'), undefined)
+  assert.equal(normalizeSerperDate('2026-02-30'), undefined)
+  // The DeepSeek lane is normalized too: its raw "2026年7月1日" used to leak through.
+  const deepseek = mapDeepSeekSearchResponse({ results: [{ url: 'https://a.example/x', title: 't', snippet: 's', date: '2026年7月1日' }] })
+  assert.equal(deepseek.sources[0].publishedAt, '2026-07-01')
+  const relative = mapDeepSeekSearchResponse({ results: [{ url: 'https://a.example/x', title: 't', snippet: 's', date: '3 days ago' }] }, { now })
+  assert.equal(relative.sources[0].publishedAt, '2026-11-24')
 })

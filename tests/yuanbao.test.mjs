@@ -363,3 +363,13 @@ test('a Yuanbao timeout degrades instead of failing the search', async () => {
   assert.match(result.content, /^Note: yuanbao timed out after 20ms, using deepseek, serper\./)
   assert.equal(provider.health.yuanbao.cls, 'timeout')
 })
+
+test('relative dates resolve against the clock on the Yuanbao lane too', () => {
+  const now = Date.parse('2026-11-27T04:00:00Z')
+  const mapped = mapYuanbaoResponse(yuanbaoPayload(['https://c0.example/0']), { now })
+  assert.equal(mapped.sources[0].publishedAt, '2026-10-01', 'an exact date is untouched')
+  const relative = mapYuanbaoResponse({
+    Response: { Pages: [JSON.stringify({ title: 't', url: 'https://c.example/x', passage: 'p', date: '2 days ago' })] },
+  }, { now })
+  assert.equal(relative.sources[0].publishedAt, '2026-11-25')
+})
