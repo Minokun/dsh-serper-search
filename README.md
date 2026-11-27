@@ -175,7 +175,6 @@ dsh plugin --profile web add dsh-serper-search
 | `minAuthority` | `-1` | 官方结果 authority 下限（`-1` 不过滤） |
 | `maxPerHost` | `2` | 单域名最多占几条（0 = 不限制）；保持来源多样性 |
 | `demoteSocial` | `true` | reddit / x.com / HN / YouTube 等社交视频源排到编辑类来源之后 |
-| `mergeMultiQuery` | `false` | 一次 `web_search` 带多个 query 时，由插件把各 query 的结果**跨 query 合并好**再交给工具层：仍然是 N 条、不重复、一条不丢，不再附带「Refine the query」提示，单域名上限对整次调用生效。见下文「多 query 调用」 |
 | `maxRetries` | `1` | 官方 429/5xx 重试次数 |
 | `logLevel` | `summary` | `off` / `summary` / `verbose` |
 | `native` | `true` | DeepSeek 这一路的开关（GUI 文案「启用 DeepSeek 搜索」，字段名保留 `native` 以兼容老配置）；`false` = 不请求官方 Search API。三路全关时搜索会**明确报错**（`no search lane is enabled`），不会静默返回 0 条 |
@@ -315,20 +314,14 @@ node /tmp/dsh-cap.mjs 24
 
 读法：两路的切法由 `ratio` 决定（`ratio: 2` 是 2:1，`ratio: 1` 是 1:1），三路的切法由 `ratio: '1:1:1'` 决定；**默认仍是 8 槽两路**（DSH 0.2.2-rc.5 起为 10 槽），想跑三路等权就把 `searchMaxResults` 提到 **24**（推荐值），元宝那 8 席会自动把 `Cnt` 从 24 向上取整成 30。
 
-### 多 query 调用：`mergeMultiQuery`
+### 多 query 调用的两个已知限制
 
-一次 `web_search` 可以带多个 query（DSH 0.2.2-rc.5 最多 10 个）。工具层把它们**并发**发给本插件、每个 query 都带满 `maxResults`，再按排名轮询合并成一份、同样只留 `maxResults` 条：3 个 query × 24 条 = 72 个候选，另外 48 个被丢掉。被丢弃会让工具层把结果标成 `truncated` 并附一句 `(Showing the first 24 sources. Refine the query for more.)`——实测 334 次多 query 结果里有 333 次带着这句，模型会因此再搜一轮。这种合并还有两个副作用。其一，几个 query 结果里的重复链接只是被跳过，并不让出名额，于是排名靠前的 query 会多占——重叠越多越明显：三个 query 的 24 条里有 16 条相同时，名额是 17 / 4 / 3；有 8 条相同时是 14 / 5 / 5；完全不重叠时仍是 8 / 8 / 8（均为测试里构造的用例，不是线上统计）。其二，单域名上限 `maxPerHost` 只对单个 query 生效，合并后同一域名可能超过 2 条。
+一次 `web_search` 可以带多个 query（DSH 0.2.2-rc.5 最多 10 个）。工具层把它们**并发**发给本插件、每个 query 都带满 `maxResults`，再由工具层自己按排名轮询合并成一份、同样只留 `maxResults` 条。这一步合并不经过本插件，带来两个限制：
 
-把 `mergeMultiQuery` 设为 `true` 后，插件认出同一次调用的各个 query（它们共用同一个 AbortSignal、在同一时刻发起），**先在插件里跨 query 合并一次**，再把合并好的列表轮流分给各 query 返回；工具层照它自己的轮询规则拼回来，得到的正好是这份列表。效果：
+1. **下文「合并质量规则」只对单个 query 生效**（单域名上限、本地化变体折叠、社交降权都是）。跨 query 合并之后，同一域名可能超过 `maxPerHost` 条：2026-11 对 329 次真实多 query 调用的统计里，67% 的最终结果中有 3 条以上来自同一域名，40% 有 4 条以上，而配置的上限是 2。
+2. **结果里常带一句截断提示。** 工具层只要丢弃了候选，就在末尾加 `(Showing the first N sources. Refine the query for more.)`——同一批统计里 93.6% 的调用带着它，单 query 调用不会出现。这句提示对模型的搜索行为有没有影响，目前没有对照数据。
 
-- **条数不变：仍然是 `maxResults` 条**（24 槽就是 24 条），不重复、一条不丢，所以不再出现「Refine the query」；5 个 query 这种除不尽的情况也一样；
-- 每个 query 仍然向各路要满 N 个候选——三个 API 都按请求次数计费，要 8 条和要 24 条价格一样，所以没有多花钱；
-- 重复链接在分配名额之前就去掉了，各 query 的名额是均衡的（8 / 8 / 8，与重叠多少无关）；单域名上限对整次调用生效；
-- 每次搜索多等约 10 毫秒（收集同批 query 的窗口）；单独一个 query、或不带 signal 的直接调用，行为与关闭时完全一样。
-
-**这是一项取舍，不是单纯的改进，所以默认关闭。** 均衡的代价是：几个 query 共有的链接不再优先占位。同样那个 16 条共有的用例里，默认路径让 13 条共有链接进入最终结果，打开后只进 8 条——另外 8 个名额让给了后两个 query 各自独有的结果。三个 query 问的是不同侧面时（比如「价格 / 局限 / 与 X 对比」），均衡更合理；如果你更想优先保留「几个 query 都搜到」的链接，保持关闭就好，那句「Refine the query」提示是它唯一的代价。
-
-缓存里存的仍是每个 query 自己完整的结果，之后单独搜同一个 query，拿到的还是完整的 24 条。
+这两条都出在工具层，插件侧改不了；向上游反馈时可以直接引用上面的数字。
 
 关键事实：**三个搜索 API 都按请求次数计费，`count` 条数不影响单价、也不显著影响延迟**——扩大 N 只增加模型上下文 token，不增加 API 费用（元宝同样按次计费，`Cnt` 10~50 同价）。serper 单次最多返回 10 条，N 超过 20 时 serper 席位会先被抽干（合并层会用其他路的来源补位，不会留空）。
 生效条件：重启 `dsh web`，并且 **agent preset 在 Agent 创建时读取 → 只对新会话生效**（已存在的会话保持旧上限）。不想 pin preset 时，也可以保持默认条数，把调研拆成两次搜索（API 费翻倍）。
