@@ -812,3 +812,16 @@ test('the DeepSeek lane sends a query the Search API accepts: no site: operator,
   assert.equal(result.content, undefined, 'the primary lane answered instead of being dropped')
   assert.ok(composition(result.sources).a > 0, 'DeepSeek sources made it into the merged result')
 })
+
+test('the gsessionid variant of the Google /goto wrapper is dropped by the same rule', () => {
+  // 18 of the 86 real wrappers carried an extra parameter —
+  // www.google.com/goto?gsessionid=…&url=<opaque> — with the same opaque destination.
+  const mapped = mapSerperResponse({
+    organic: [
+      { link: 'https://www.google.com/goto?gsessionid=abc123&url=CAESrQEB6zswFQ', title: 'wrapper', snippet: 'w' },
+      { link: 'https://www.google.com/goto?url=CAESrQEB6zswFQ&gsessionid=abc123', title: 'wrapper too', snippet: 'w' },
+      { link: 'https://example.com/real', title: 'real' },
+    ],
+  })
+  assert.deepEqual(mapped.sources.map((source) => source.url), ['https://example.com/real'])
+})
