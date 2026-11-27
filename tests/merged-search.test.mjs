@@ -16,6 +16,7 @@ import {
   effectiveSerperLocale,
   mapDeepSeekSearchResponse,
   mapSerperResponse,
+  mergeLanes,
   mergeResults,
   mergeSources,
   normalizeSerperDate,
@@ -756,4 +757,29 @@ test('publishedAt is a real calendar date on every lane: no day shift, no relati
   assert.equal(deepseek.sources[0].publishedAt, '2026-07-01')
   const relative = mapDeepSeekSearchResponse({ results: [{ url: 'https://a.example/x', title: 't', snippet: 's', date: '3 days ago' }] }, { now })
   assert.equal(relative.sources[0].publishedAt, '2026-11-24')
+})
+
+test("a candidate blocked by maxPerHost does not consume its lane's interleave slot", () => {
+  // After P's first take the per-host cap (1) blocks every further a.example item.
+  // S's turn used to go empty because its head was dropped, so a 1:1 pattern
+  // skewed towards P; S now fills its turn with its next eligible candidate.
+  const lane = (urls) => urls.map((url) => ({ url }))
+  const tag = (source) => `${new URL(source.url).hostname[0]}${source.url.at(-1)}`
+  const { sources } = mergeLanes(
+    [
+      { name: 'P', sources: lane(['https://a.example/1', 'https://a.example/2', 'https://b.example/1', 'https://b.example/2']) },
+      { name: 'S', sources: lane(['https://a.example/3', 'https://a.example/4', 'https://c.example/1', 'https://c.example/2']) },
+    ],
+    { pattern: ['P', 'S'], maxResults: 4, maxPerHost: 1 },
+  )
+  assert.deepEqual(sources.map(tag), ['a1', 'c1', 'b1'])
+  // A lane with nothing eligible left still hands its slot to the next lane.
+  const wide = mergeLanes(
+    [
+      { name: 'P', sources: lane(['https://a.example/1', 'https://a.example/2']) },
+      { name: 'S', sources: lane(['https://c.example/1', 'https://c.example/2', 'https://c.example/3', 'https://d.example/1']) },
+    ],
+    { pattern: ['P', 'S'], maxResults: 4, maxPerHost: 1 },
+  )
+  assert.deepEqual(wide.sources.map(tag), ['a1', 'c1', 'd1'])
 })
