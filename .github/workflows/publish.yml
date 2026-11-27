@@ -1,4 +1,5 @@
-# npm Trusted Publishing: releases via GitHub Actions OIDC on main push or v* tag push.
+# npm Trusted Publishing: releases via GitHub Actions OIDC on every push to main
+# whose package.json version is not on npm yet.
 #
 # One-time binding (npmjs.com → package dsh-serper-search → Settings →
 # Trusted Publisher → GitHub Actions):
@@ -9,14 +10,25 @@
 #
 # Release flow: either bump version in package.json and `git push`, or run
 # `sh scripts/release.sh` — this workflow builds and publishes; no token, no OTP.
+#
+# Exactly one trigger path on purpose. `sh scripts/release.sh` pushes the release
+# commit and its tag together (`git push --follow-tags`); triggering on the tag
+# as well started a second run for the same release, and both passed the
+# "already published?" check before either had published (a double npm publish
+# and a double GitHub Release). A tag pushed on its own publishes nothing: cut
+# a release by pushing main.
 name: publish
 
 on:
   push:
     branches:
       - main
-    tags:
-      - 'v*'
+
+# Back-to-back runs wait for each other and are never cancelled halfway: the
+# later one then sees the version already on npm and skips.
+concurrency:
+  group: publish
+  cancel-in-progress: false
 
 jobs:
   publish:
