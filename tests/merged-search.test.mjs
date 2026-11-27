@@ -713,3 +713,18 @@ test('normalizeUrl folds http/https and the www. prefix onto one comparison key'
   // The first lane's original URL is what the model sees; only the key is folded.
   assert.equal(merged.sources[0].url, 'http://www.example.com/a')
 })
+
+test('serper google.com/goto redirect wrappers are dropped instead of becoming citations', () => {
+  // The destination behind Google's /goto wrapper is opaque, so the model would
+  // cite a meaningless redirect link (86 real occurrences since 10-25).
+  const mapped = mapSerperResponse({
+    organic: [
+      { link: 'https://www.google.com/goto?url=CAESrQEB6zswFQ', title: 'Hi3559 V100', snippet: 'wrapper' },
+      { link: 'http://google.com/goto?url=another', title: 'wrapper too', snippet: 'w' },
+      { link: 'https://example.com/real', title: 'real', snippet: 'r' },
+      // Not a wrapper: a Google page in its own right stays.
+      { link: 'https://www.google.com/search?q=dsh', title: 'serp', snippet: 's' },
+    ],
+  })
+  assert.deepEqual(mapped.sources.map((source) => source.url), ['https://example.com/real', 'https://www.google.com/search?q=dsh'])
+})
