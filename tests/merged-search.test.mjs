@@ -684,3 +684,16 @@ test('Config keeps the shipped defaults and honours a persisted one-shot marker'
   const persisted = Config({ takeOverProvider: false })
   assert.equal(persisted.takeOverProvider.get(), false)
 })
+
+// ── regressions from the 2026-11-27 debug run (autoresearch/debug-261127-1141) ──
+
+test('summary clipping never splits a surrogate pair at the cut', () => {
+  // The cut lands one UTF-16 code unit into the emoji (U+D83D U+DE00); the lone
+  // high surrogate must not survive into the snippet.
+  const emoji = `${'x'.repeat(598)}😀tail`
+  const clipped = mapDeepSeekSearchResponse({ results: [{ title: 'T', url: 'https://a.example/1', summary: emoji }] }, { summaryMaxChars: 600 })
+  assert.equal(clipped.sources[0].snippet, `${'x'.repeat(598)}…`)
+  // A cut that does not land inside a pair is unchanged.
+  const plain = mapDeepSeekSearchResponse({ results: [{ title: 'T', url: 'https://a.example/1', summary: 'x'.repeat(1800) }] }, { summaryMaxChars: 600 })
+  assert.equal(plain.sources[0].snippet, `${'x'.repeat(599)}…`)
+})
