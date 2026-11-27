@@ -545,3 +545,39 @@ test('a credentials update drops the cached degraded answer, so the fixed lane i
     globalThis.fetch = originalFetch
   }
 })
+
+test('a lane muted by cooldown is retried once when every live lane then fails', async () => {
+  // Real-log error shape (3 of 5 total errors): "[quota] skipped: … cooldown active"
+  // plus a live-lane timeout. The muted lane would have answered (balance topped
+  // up, or the 402 was transient) but was requested 0 times and the search failed.
+  let deepseekAnswers = false
+  let serperMode = 'ok'
+  const deepseekFetch = stubFetch(() => (deepseekAnswers
+    ? jsonResponse(deepseekPayload(A_URLS))
+    : jsonResponse({ error: 'Insufficient Balance' }, 402)))
+  const serperFetch = stubFetch((url, init) => (serperMode === 'ok' ? jsonResponse(serperPayload(B_URLS)) : hangingFetch()(url, init)))
+  const provider = new MergedSearchProvider(() => mergedOptions({ deepseekFetch, serperFetch }))
+
+  const first = await provider.search(request(), SIGNAL)
+  assert.match(first.content, /^Note: deepseek quota exhausted \(HTTP 402\), using serper\./)
+  assert.equal(provider.health.deepseek.cls, 'quota')
+
+  // DeepSeek recovered but is still muted; serper now hangs.
+  deepseekAnswers = true
+  serperMode = 'hang'
+  const second = await provider.search(request(), SIGNAL)
+  assert.equal(deepseekFetch.calls.length, 2, 'the muted lane got its one retry')
+  assert.equal(provider.health.deepseek.until, 0, 'answering clears the cooldown')
+  assert.ok(second.sources.some((source) => source.url.startsWith('https://a')), 'the recovered lane contributes sources')
+  assert.match(second.content, /^Note: serper timed out( after \d+ms)?, using deepseek\./)
+
+  // When the retry fails too, the search still fails the way it always did.
+  deepseekAnswers = false
+  serperMode = 'ok'
+  await provider.search(request(), SIGNAL)
+  assert.equal(provider.health.deepseek.cls, 'quota')
+  serperMode = 'hang'
+  await assert.rejects(provider.search(request(), SIGNAL), /Merged search failed on all backends/)
+  assert.equal(deepseekFetch.calls.length, 4, 'first, retry, re-cooled request, failed retry')
+  assert.equal(provider.health.deepseek.cls, 'quota', 'the failed retry re-records the cooldown')
+})
