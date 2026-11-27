@@ -285,6 +285,7 @@ DSH 的 `ctx.web` 是「多 provider 注册、按配置选一个」。内置的 
 ```sh
 # 仓库内（git clone 后）
 node scripts/sync-dsh-preset-cap.mjs 24          # 或 npm run sync-preset-cap -- 24
+node scripts/sync-dsh-preset-cap.mjs --interrupt 24   # 可选：同时把 interrupt 固定为 true（见下方「--interrupt」）
 
 # 市场 / npm 安装的：取仓库里同一份脚本（纯文本生成，不联网）
 curl -fsSL https://raw.githubusercontent.com/Minokun/dsh-serper-search/main/scripts/sync-dsh-preset-cap.mjs -o /tmp/dsh-cap.mjs
@@ -294,7 +295,8 @@ node /tmp/dsh-cap.mjs 24
 - 脚本会在 `~/.dsh/profiles/web/cordis.patch.yml` 里写入/替换 `# >>> dsh preset-standard override >>>` 标记区（169 行，含完整 preset 插件列表）；
 - 它是纯文本生成器（读 `dsh --dump-config` 的输出、写你自己的 profile patch），不联网、不改 DSH 安装目录；**回退**就是把该标记区整块删掉，插件行为不受影响（它只按工具层传入的 `maxResults` 返回结果）；
 - **DSH 升级后重跑一次**，避免 pin 住的旧 preset 缺少新插件；
-- 只支持 `standard` preset；若你在 GUI 切换了其它 preset（ptc / cordis），那边的 `tool-web` 仍是 8 条。
+- 只支持 `standard` preset；若你在 GUI 切换了其它 preset（ptc / cordis），那边的 `tool-web` 仍是默认条数；
+- **`--interrupt` 是显式选项，默认不加。** 不加时脚本只改 `searchMaxResults`，`tool-subagent-control` 原样沿用 DSH 的组合结果；加了才会把它的 `interrupt` 固定为 `true`。DSH ≥ 0.2.2-rc.1 起默认是 `false`（即默认不带 `interrupt_agent` 工具，Team 模式亦然），所以这是对 DSH 默认值的**有意偏离**，只在你确实需要时使用。两个方向都不会静默发生：如果标记区里已有的块固定了 `interrupt: true`，不带参数重跑会**拒绝执行**并提示——要保留就带 `--interrupt`，要故意去掉就显式写 `--no-interrupt`。
 
 | N | 两路构成 | 三路构成（`ratio: '1:1:1'`） | 每次搜索增量成本 | 适用 |
 |---|---|---|---|---|
