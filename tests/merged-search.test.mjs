@@ -697,3 +697,19 @@ test('summary clipping never splits a surrogate pair at the cut', () => {
   const plain = mapDeepSeekSearchResponse({ results: [{ title: 'T', url: 'https://a.example/1', summary: 'x'.repeat(1800) }] }, { summaryMaxChars: 600 })
   assert.equal(plain.sources[0].snippet, `${'x'.repeat(599)}…`)
 })
+
+test('normalizeUrl folds http/https and the www. prefix onto one comparison key', () => {
+  // 7.7% of real results carried the same page under both http and https.
+  const key = normalizeUrl('https://example.com/a')
+  assert.equal(normalizeUrl('http://Example.com/a/'), key)
+  assert.equal(normalizeUrl('https://www.example.com/a'), key)
+  assert.equal(normalizeUrl('http://www.example.com/a/?utm_source=x'), key)
+  // A non-default port is a different site; other schemes are left alone.
+  assert.notEqual(normalizeUrl('http://example.com:8080/a'), key)
+  assert.equal(normalizeUrl('ftp://www.example.com/a/'), 'ftp://www.example.com/a')
+  // So the same page now dedupes across lanes instead of taking two slots.
+  const merged = mergeSources([{ url: 'http://www.example.com/a' }], [{ url: 'https://example.com/a/' }], { ratio: 2, maxResults: 8 })
+  assert.equal(merged.sources.length, 1)
+  // The first lane's original URL is what the model sees; only the key is folded.
+  assert.equal(merged.sources[0].url, 'http://www.example.com/a')
+})
