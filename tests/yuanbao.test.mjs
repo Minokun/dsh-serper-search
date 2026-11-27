@@ -373,3 +373,35 @@ test('relative dates resolve against the clock on the Yuanbao lane too', () => {
   }, { now })
   assert.equal(relative.sources[0].publishedAt, '2026-11-25')
 })
+
+test('a Yuanbao endpoint change clears its cooldown (the fingerprint follows `endpoint`)', async () => {
+  // The Yuanbao lane's options carry `endpoint`, not `baseURL`, and the credential
+  // fingerprint read `baseURL` only: repointing the endpoint left the old endpoint's
+  // cooldown in force (repro R5: two different endpoints, one fingerprint).
+  let endpoint = 'https://api.wsa.cloud.tencent.com/SearchPro'
+  let yuanbaoMode = 'unauthorized'
+  const deepseekFetch = stubFetch(() => jsonResponse(deepseekPayload(A_URLS)))
+  const serperFetch = stubFetch(() => jsonResponse(serperPayload(B_URLS)))
+  const yuanbaoFetch = stubFetch(() => (yuanbaoMode === 'unauthorized'
+    ? jsonResponse({ message: 'bad key' }, 401)
+    : jsonResponse(yuanbaoPayload(C_URLS))))
+  const provider = new MergedSearchProvider(() => {
+    const base = threeLaneOptions({ deepseekFetch, serperFetch, yuanbaoFetch })
+    return { ...base, yuanbao: { ...base.yuanbao, endpoint } }
+  })
+
+  await provider.search(request(), SIGNAL())
+  assert.equal(yuanbaoFetch.calls.length, 1)
+  assert.equal(provider.health.yuanbao.cls, 'auth')
+
+  // Unchanged endpoint: still cooling.
+  await provider.search(request(), SIGNAL())
+  assert.equal(yuanbaoFetch.calls.length, 1)
+
+  // Repointed to a working endpoint: the changed fingerprint clears the cooldown.
+  endpoint = 'https://yuanbao-proxy.example/SearchPro'
+  yuanbaoMode = 'ok'
+  await provider.search(request(), SIGNAL())
+  assert.equal(yuanbaoFetch.calls.length, 2, 'the new endpoint must be tried instead of skipped')
+  assert.equal(provider.health.yuanbao.until, 0)
+})

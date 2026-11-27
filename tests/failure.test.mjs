@@ -273,3 +273,17 @@ test('an unparseable 200 response is invalid-response, not a timeout', async () 
     return true
   })
 })
+
+test('credentialFingerprint follows the Yuanbao endpoint as well as baseURL', () => {
+  // Repro R5: the Yuanbao lane names its endpoint `endpoint`, so two different
+  // endpoints produced one fingerprint and a cooldown outlived the fix.
+  const a = credentialFingerprint({ apiKeyEnv: 'YUANBAO_API_KEY', endpoint: 'https://api.wsa.cloud.tencent.com/SearchPro' })
+  const b = credentialFingerprint({ apiKeyEnv: 'YUANBAO_API_KEY', endpoint: 'https://example.invalid/Other' })
+  assert.notEqual(a, b)
+  assert.equal(a, credentialFingerprint({ apiKeyEnv: 'YUANBAO_API_KEY', endpoint: 'https://api.wsa.cloud.tencent.com/SearchPro' }))
+  // Unchanged for the lanes that carry `baseURL`.
+  assert.equal(
+    credentialFingerprint({ apiKeyEnv: 'SERPER_API_KEY', baseURL: 'https://google.serper.dev' }),
+    credentialFingerprint({ apiKeyEnv: 'SERPER_API_KEY', baseURL: 'https://google.serper.dev' }),
+  )
+})
