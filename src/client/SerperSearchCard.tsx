@@ -52,6 +52,7 @@ export interface SerperSearchCardState extends SettingsFormShell {
   yuanbaoEndpoint: SettingsFieldState
   yuanbaoCnt: SettingsFieldState
   yuanbaoTimeoutMs: SettingsFieldState
+  yuanbaoSnippetMaxChars: SettingsFieldState
   yuanbaoApiKey: SettingsFieldState
   yuanbaoApiKeyConfigured: boolean
   yuanbaoApiKeyWritable: boolean
@@ -342,6 +343,7 @@ export function SerperSearchCard(props: SerperSearchCardProps): ReactNode {
           {field({ id: 'plugin-config-serper-search-yuanbao-endpoint', label: t('yuanbaoEndpoint'), hint: t('yuanbaoEndpointHint'), field: 'yuanbaoEndpoint', state: state.yuanbaoEndpoint })}
           {field({ id: 'plugin-config-serper-search-yuanbao-cnt', label: t('yuanbaoCnt'), hint: t('yuanbaoCntHint'), field: 'yuanbaoCnt', state: state.yuanbaoCnt, numeric: true })}
           {field({ id: 'plugin-config-serper-search-yuanbao-timeout', label: t('yuanbaoTimeoutMs'), hint: t('yuanbaoTimeoutMsHint'), field: 'yuanbaoTimeoutMs', state: state.yuanbaoTimeoutMs, numeric: true })}
+          {field({ id: 'plugin-config-serper-search-yuanbao-snippet', label: t('yuanbaoSnippetMaxChars'), hint: t('yuanbaoSnippetMaxCharsHint'), field: 'yuanbaoSnippetMaxChars', state: state.yuanbaoSnippetMaxChars, numeric: true })}
         </section>
       </div>
       <RuntimePanel t={t} />

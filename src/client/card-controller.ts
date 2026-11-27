@@ -120,6 +120,7 @@ export class SerperSearchCardController {
       settingsTextField('yuanbaoEndpoint'),
       settingsNumberField('yuanbaoCnt'),
       settingsNumberField('yuanbaoTimeoutMs'),
+      settingsNumberField('yuanbaoSnippetMaxChars'),
       // One enable switch per group (`native` keeps its v0.3 name on purpose).
       settingsBooleanField('native'),
       settingsBooleanField('serperEnabled'),
@@ -163,6 +164,7 @@ export class SerperSearchCardController {
       yuanbaoEndpoint: this.form.field('yuanbaoEndpoint'),
       yuanbaoCnt: this.form.field('yuanbaoCnt'),
       yuanbaoTimeoutMs: this.form.field('yuanbaoTimeoutMs'),
+      yuanbaoSnippetMaxChars: this.form.field('yuanbaoSnippetMaxChars'),
       yuanbaoEnabled: this.form.field('yuanbaoEnabled'),
       yuanbaoApiKey: this.form.field('yuanbaoApiKey'),
       yuanbaoApiKeyConfigured: this.credentials.yuanbao.configured,

@@ -326,6 +326,7 @@ test('cacheKey covers the Yuanbao lane and the resolved pattern', () => {
   assert.notEqual(cacheKey('q', { ...base, yuanbao: { ...base.yuanbao, count: 30 } }, 24), key, 'yuanbao Cnt override')
   assert.notEqual(cacheKey('q', { ...base, pattern: RATIO_PATTERNS['2:1:1'] }, 24), key, 'pattern')
   assert.notEqual(cacheKey('q', { ...base, lanes: ['deepseek', 'serper'] }, 24), key, 'lane set')
+  assert.notEqual(cacheKey('q', { ...base, yuanbao: { ...base.yuanbao, snippetMaxChars: 300 } }, 24), key, 'yuanbao snippet budget')
 })
 
 test('the Yuanbao lane alone is usable (direct backend call)', async () => {
@@ -404,4 +405,35 @@ test('a Yuanbao endpoint change clears its cooldown (the fingerprint follows `en
   await provider.search(request(), SIGNAL())
   assert.equal(yuanbaoFetch.calls.length, 2, 'the new endpoint must be tried instead of skipped')
   assert.equal(provider.health.yuanbao.until, 0)
+})
+
+test('a long Yuanbao passage is clipped to the snippet budget, without splitting a surrogate pair', () => {
+  // Real logs: 282 sources over 2000 chars (max 6000) held 23.9% of all snippet
+  // text, while the DeepSeek summary was capped at summaryMaxChars (repro R4).
+  const page = (passage, options) => mapYuanbaoResponse({ Response: { Pages: [JSON.stringify({ title: 't', url: 'https://c.example/x', passage })] } }, options)
+  const long = page('甲'.repeat(6000))
+  assert.equal(long.sources[0].snippet.length, 1000)
+  assert.ok(long.sources[0].snippet.endsWith('…'))
+  // The cut lands one UTF-16 code unit into the emoji: no lone surrogate survives.
+  assert.equal(page(`${'x'.repeat(998)}😀tail`).sources[0].snippet, `${'x'.repeat(998)}…`)
+  // Within the budget: untouched. The budget is configurable; `0` turns clipping off.
+  assert.equal(page('short passage').sources[0].snippet, 'short passage')
+  assert.equal(page('甲'.repeat(6000), { snippetMaxChars: 300 }).sources[0].snippet.length, 300)
+  assert.equal(page('甲'.repeat(6000), { snippetMaxChars: 0 }).sources[0].snippet.length, 6000)
+})
+
+test('the lane clips passages with its configured snippet budget', async () => {
+  const payload = yuanbaoPayload(C_URLS)
+  payload.Response.Pages = payload.Response.Pages.map((raw) => JSON.stringify({ ...JSON.parse(raw), passage: '甲'.repeat(6000) }))
+  const yuanbaoFetch = stubFetch(() => jsonResponse(payload))
+  const deepseekFetch = stubFetch(() => jsonResponse(deepseekPayload(A_URLS)))
+  const serperFetch = stubFetch(() => jsonResponse(serperPayload(B_URLS)))
+  const provider = new MergedSearchProvider(() => {
+    const base = threeLaneOptions({ deepseekFetch, serperFetch, yuanbaoFetch })
+    return { ...base, yuanbao: { ...base.yuanbao, snippetMaxChars: 300 } }
+  })
+  const result = await provider.search(request('clipped passage', 24), SIGNAL())
+  const yuanbaoSources = result.sources.filter((source) => source.url.startsWith('https://c'))
+  assert.ok(yuanbaoSources.length > 0, 'the Yuanbao lane contributed sources')
+  assert.ok(yuanbaoSources.every((source) => source.snippet.length <= 300), 'every Yuanbao snippet respects the budget')
 })

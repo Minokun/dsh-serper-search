@@ -64,6 +64,8 @@ export const en = {
   yuanbaoCntHint: '0 = derive from the tool cap and round up; the API only accepts 10/20/30/40/50. Leave blank for the default.',
   yuanbaoTimeoutMs: 'Timeout (ms)',
   yuanbaoTimeoutMsHint: 'Timeout for one Yuanbao request. Leave blank for the default.',
+  yuanbaoSnippetMaxChars: 'Passage length',
+  yuanbaoSnippetMaxCharsHint: 'Characters of each Yuanbao passage kept as the snippet (0 keeps the whole passage). Leave blank for the default.',
 
   overridden: 'Overridden',
   reset: 'Reset to default',
@@ -157,6 +159,8 @@ export const zh: Record<keyof typeof en, string> = {
   yuanbaoCntHint: '0 = 按工具层上限推导并向上取整；接口只接受 10/20/30/40/50。留空则使用默认值。',
   yuanbaoTimeoutMs: '超时（ms）',
   yuanbaoTimeoutMsHint: '元宝单次请求超时。留空则使用默认值。',
+  yuanbaoSnippetMaxChars: '摘要长度',
+  yuanbaoSnippetMaxCharsHint: '元宝 passage 注入 snippet 的最大字符数（0 = 不截断）。留空则使用默认值。',
 
   overridden: '已覆盖',
   reset: '恢复默认',
