@@ -1,6 +1,6 @@
 {
   "name": "dsh-serper-search",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Merged, cached, health-aware web search for the DeepSeek Harness: DeepSeek Search API (primary) + serper.dev Google results (secondary) + opt-in Tencent Cloud Yuanbao Search / WSA SearchPro (third lane), interleaved by a fixed slot pattern and registered as one provider on the ctx.web seam so the built-in web_search tool serves all of them at once; results are cached for five minutes, a failing backend cools down with a one-line Note, and the settings card probes every enabled backend, checks npm for updates and can switch the active provider.",
   "license": "MIT",
   "author": "Minokun",
