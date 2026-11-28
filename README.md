@@ -173,7 +173,7 @@ dsh plugin --profile web add dsh-serper-search
 | `primary` | `deepseek` | 主导路（决定交错前排与去重保留优先级） |
 | `ratio` | `2` | 槽位交错比例。两路模式：`1 / 1.5 / 2 / 3 / 4`（白名单）；三路模式（`yuanbaoEnabled: true`）：`'1:1:1'`（默认，8+8+8）或 `'2:1:1'`。三路模式下填数字会被当作 `'1:1:1'`，不会把第三路挤出交错 |
 | `minAuthority` | `-1` | 官方结果 authority 下限（`-1` 不过滤） |
-| `maxPerHost` | `2` | 单域名最多占几条（0 = 不限制）；保持来源多样性 |
+| `maxPerHost` | `2` | 单域名最多占几条（0 = 不限制）；保持来源多样性。候选集中在少数域名、按上限凑不满 `maxResults` 时，被拦下的候选按名次补齐（0.5.2 起，结果条数优先） |
 | `demoteSocial` | `true` | reddit / x.com / HN / YouTube 等社交视频源排到编辑类来源之后 |
 | `maxRetries` | `1` | 官方 429/5xx 重试次数 |
 | `logLevel` | `summary` | `off` / `summary` / `verbose` |
@@ -199,7 +199,7 @@ dsh plugin --profile web add dsh-serper-search
   - 官方 `date` → `publishedAt`；serper 中文日期（`2026年8月13日`）→ ISO；
   - 官方 `authority` 支持 `minAuthority` 过滤（保留 `-1` 未知站点）；
   - 纯英文/代码 query（`autoLocale` 默认开启、`gl=cn` 时）自动切到 `gl=us, hl=en`：实测英文 query 延迟从 3.6–10.5s 降到 1.0–1.7s。
-- 合并：按归一化 URL 去重（去 fragment / `utm_*` / `spm_*` / 百度百科等追踪参数；`chapter`、`channel`、`from=20` 等业务参数不误删）→ **v3.1 质量规则**（单域名最多 `maxPerHost: 2` 条、同页 `/de/` `/fr/` 本地化变体折叠、reddit/x.com/HN/YouTube 等社交视频源降权到编辑类来源之后）→ 按固定比例模式交错 → 截到 `maxResults`（工具层默认 8/12）→ 返回 `truncated: false`（单 query 时避免工具给模型追加 "Refine the query for more" 诱导重搜的尾注；多 query 时工具层轮转仍可能自行追加，插件无法控制）。
+- 合并：按归一化 URL 去重（去 fragment / `utm_*` / `spm_*` / 百度百科等追踪参数；`chapter`、`channel`、`from=20` 等业务参数不误删）→ **v3.1 质量规则**（单域名最多 `maxPerHost: 2` 条——按上限凑不满 `maxResults` 时，被拦下的候选按名次补齐，日志汇总行记 `capFill=N`；同页 `/de/` `/fr/` 本地化变体折叠、reddit/x.com/HN/YouTube 等社交视频源降权到编辑类来源之后）→ 按固定比例模式交错 → 截到 `maxResults`（工具层默认 8/12）→ 返回 `truncated: false`（单 query 时避免工具给模型追加 "Refine the query for more" 诱导重搜的尾注；多 query 时工具层轮转仍可能自行追加，插件无法控制）。
 - 降级：任一路失败/超时/缺 key，其余路独立成答（三路时同样适用：两路降级到一路也可用）；**全部启用的路都失败才报错**，错误里列出每一路的失败分类与原因。每路独立超时（官方 4500ms / serper 4500ms，重试与首次请求共享同一预算），官方 429/5xx 有 1s→2s 指数退避重试；超时/取消覆盖到响应体读取阶段。降级时 `content` 顶部会多一行模型可见的 `Note:`（见下），UI 卡片会把 `content` 当作答案显示，所以这行也会出现在界面上——已知且接受。
 - **结果缓存（v0.4.0）**：成功结果进 50 条 LRU，默认 5 分钟（`cacheMinutes`，`0` 关闭）。键覆盖所有影响输出的设置（query / maxResults / `primary` / `ratio` / `maxPerHost` / `demoteSocial` / `gl` / `hl` / `autoLocale` / `num` / `native` / `deepseekCount` / `summaryMaxChars` / `minAuthority` / `serper.baseURL` / `deepseek.baseURL` / `serperEnabled` / `yuanbaoEnabled` / `yuanbaoEndpoint` / `yuanbaoCnt` / 交错 pattern / 启用的 lane 集合），命中时 **0 上游请求**，日志 `cache=hit`并在日志打 `cache=hit len=N`；未命中打完请求后打 `cache=store`。降级结果只缓存 `max(60s, TTL/5)`，避免把"暂时坏掉的一路"钉住 5 分钟；冷却被清除（改 key、探测成功等）时缓存一并失效，abort 与失败永不入缓存。
 - **失败分类与冷却（v0.4.0）**：非 2xx / 超时 / 网络错误先分类再决定是否静音该路；某路冷却期间由其余路成答，`content` 顶部加一行 `Note:`，日志打 `cooldown <lane>=<class> until=+Ns fp=xxxxxxxxxxxx`。全部启用路同时冷却时 **fail-open** 仍请求它们（宁可慢，也不让搜索彻底不可用）。
@@ -457,7 +457,7 @@ Restart `dsh web`. The GUI card is one form with three independent source groups
 
 Cost: 0.0122 CNY per search (DeepSeek 0.005 + serper ~0.0072), latency dominated by serper (1.8–2.9 s); a repeated query within the cache window costs nothing. If Google coverage is not needed, the built-in `deepseek-search-api` provider is faster (0.34 s) and cheaper; use this plugin only when you want the two indexes merged.
 
-v3.1 adds merge-quality rules measured from two real research sessions: `maxPerHost` (default 2) stops one site from squatting on the result list (localized variants like `/de/…` vs `/fr/…` collapse first), and `demoteSocial` (default true) sorts reddit/x.com/HN/YouTube-style hosts behind editorial and official sources. Both are patch-only settings with defaults, so upgrades need no config change.
+v3.1 adds merge-quality rules measured from two real research sessions: `maxPerHost` (default 2) stops one site from squatting on the result list (localized variants like `/de/…` vs `/fr/…` collapse first), and `demoteSocial` (default true) sorts reddit/x.com/HN/YouTube-style hosts behind editorial and official sources. Both are patch-only settings with defaults, so upgrades need no config change. Since 0.5.2 the cap never shortens a result: when too few distinct hosts remain to fill `maxResults`, the candidates the cap skipped fill the empty slots in rank order (the log line reports `capFill=N`).
 
 Dev: `pnpm build`, `pnpm typecheck`, `pnpm test` (node --test), and `scripts/verify-live.mjs` for a real-API smoke check (its cache/cooldown/degradation assertions run offline against stub transports and need no keys; only the live section spends credits). Host files `lib/index.js` and `lib/merge.js` are hand-written ESM (not built by tsdown); run `node --check` plus the unit tests after editing them.
 

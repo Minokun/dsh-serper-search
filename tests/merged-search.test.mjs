@@ -579,13 +579,125 @@ test('maxResults: 3 and an omitted cap are honored', () => {
 
 // ── v3.1 quality rules: per-host cap, locale dedupe, social demotion ────────
 
-test('maxPerHost caps one host at two sources by default', () => {
-  const repeated = Array.from({ length: 6 }, (_, index) => ({ url: `https://same.example/${index}` }))
-  const others = Array.from({ length: 6 }, (_, index) => ({ url: `https://other${index}.example/${index}` }))
-  const merged = mergeSources(repeated, others, { ratio: 2, maxResults: 10, maxPerHost: 2 })
-  const sameHost = merged.sources.filter((source) => new URL(source.url).hostname === 'same.example')
+const SAME_HOST = (index) => ({ url: `https://same.example/${index}` })
+const OTHER_HOST = (index) => ({ url: `https://other${index}.example/${index}` })
+const hostOf = (source) => new URL(source.url).hostname
+
+test('maxPerHost caps one host at two sources when the cap still fills maxResults', () => {
+  const repeated = Array.from({ length: 6 }, (_, index) => SAME_HOST(index))
+  const others = Array.from({ length: 8 }, (_, index) => OTHER_HOST(index))
+  const { sources, capFill } = mergeSources(repeated, others, { ratio: 2, maxResults: 10, maxPerHost: 2 })
+  const sameHost = sources.filter((source) => hostOf(source) === 'same.example')
   assert.equal(sameHost.length, 2)
-  assert.equal(merged.sources.length, 8)
+  assert.equal(sources.length, 10)
+  assert.equal(capFill, 0, 'nothing is filled when the capped pass already reaches maxResults')
+})
+
+test('the per-host cap never shortens the result: skipped candidates fill the empty slots', () => {
+  // 12 distinct URLs on two hosts with maxResults 10. The cap alone returned 8
+  // (2 + 6): two slots stayed empty although the pool had four more pages.
+  const repeated = Array.from({ length: 6 }, (_, index) => SAME_HOST(index))
+  const others = Array.from({ length: 6 }, (_, index) => OTHER_HOST(index))
+  const { sources, capFill, truncated } = mergeSources(repeated, others, { ratio: 2, maxResults: 10, maxPerHost: 2 })
+  assert.equal(sources.length, 10)
+  assert.equal(truncated, false)
+  assert.equal(capFill, 2)
+  // The capped pass keeps its diverse head (2 + 6); only then do the 2 skipped pages follow.
+  assert.deepEqual(sources.slice(0, 8).map(hostOf), [
+    'same.example', 'same.example',
+    ...Array.from({ length: 6 }, (_, index) => `other${index}.example`),
+  ])
+  assert.deepEqual(sources.slice(8).map(hostOf), ['same.example', 'same.example'])
+})
+
+test('a pool smaller than maxResults is returned in full instead of being cut by the cap', () => {
+  const { sources, capFill } = mergeLanes(
+    [{ name: 'P', sources: [SAME_HOST(1), SAME_HOST(2), SAME_HOST(3), OTHER_HOST(1)] }],
+    { maxResults: 8, maxPerHost: 2 },
+  )
+  // 3 of the 4 pages sit on one host: the cap used to drop the third one for nothing.
+  assert.deepEqual(sources.map((source) => new URL(source.url).host + new URL(source.url).pathname), [
+    'same.example/1', 'same.example/2', 'other1.example/1', 'same.example/3',
+  ])
+  assert.equal(capFill, 1)
+})
+
+test('a query whose hits sit on one or two sites still gets maxResults sources', () => {
+  const lane = (urls) => urls.map((url) => ({ url }))
+  // Ranks alternate between the two sites inside every lane, the way a real ranking mixes hosts.
+  const both = (offset) => Array.from({ length: 12 }, (_, index) => [
+    `https://docs.example.org/guide/${index + offset}.html`,
+    `https://github.com/o/r/blob/${index + offset}.md`,
+  ]).flat()
+  const threeLanes = { pattern: ['a', 'b', 'c'], maxResults: 24, maxPerHost: 2 }
+  const split = mergeLanes([
+    { name: 'a', sources: lane(both(0)) },
+    { name: 'b', sources: lane(both(20)) },
+    { name: 'c', sources: lane(both(40)) },
+  ], threeLanes)
+  // Two hosts, 72 distinct pages: 4 (the old result) becomes 24. The capped head comes first
+  // (2 + 2); the other 20 follow the lanes' rank order in rounds of 6 (3 docs + 3 GitHub):
+  // three full rounds plus 2, so docs take 2 + 9 + 2 and GitHub 2 + 9.
+  const byHost = (list, host) => list.filter((source) => hostOf(source) === host).length
+  assert.equal(split.sources.length, 24)
+  assert.equal(byHost(split.sources, 'docs.example.org'), 13)
+  assert.equal(byHost(split.sources, 'github.com'), 11)
+  assert.deepEqual(split.sources.slice(0, 4).map(hostOf), ['docs.example.org', 'docs.example.org', 'github.com', 'github.com'])
+  assert.equal(split.capFill, 20)
+  assert.equal(split.truncated, false)
+
+  // `site:github.com …`: every lane answers from the one site. 2 (the old result) becomes 24, best ranks first.
+  const site = mergeLanes([
+    { name: 'a', sources: lane(Array.from({ length: 20 }, (_, index) => `https://github.com/o/r/issues/${index}`)) },
+    { name: 'b', sources: lane(Array.from({ length: 20 }, (_, index) => `https://github.com/o/r/pull/${index}`)) },
+  ], { pattern: ['a', 'b'], maxResults: 24, maxPerHost: 2 })
+  assert.equal(site.sources.length, 24)
+  assert.ok(site.sources.every((source) => hostOf(source) === 'github.com'))
+  assert.deepEqual(site.sources.slice(0, 3).map((source) => new URL(source.url).pathname), ['/o/r/issues/0', '/o/r/pull/0', '/o/r/issues/1'])
+  assert.equal(site.capFill, 22)
+})
+
+test('randomized pools: the result length is always min(maxResults, distinct URLs), and the cap only gives way when it must', () => {
+  // Seeded generator, so a failure reproduces from the printed seed.
+  let seed = 0x5eed51
+  const random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2 ** 32 }
+  const pick = (list) => list[Math.floor(random() * list.length)]
+  for (let iteration = 0; iteration < 400; iteration += 1) {
+    const hostCount = 1 + Math.floor(random() * 12)
+    const hosts = Array.from({ length: hostCount }, (_, index) => `h${index}.example`)
+    const laneCount = 1 + Math.floor(random() * 3)
+    const lanes = Array.from({ length: laneCount }, (_, lane) => ({
+      name: `l${lane}`,
+      sources: Array.from({ length: Math.floor(random() * 15) }, () => ({ url: `https://${pick(hosts)}/${Math.floor(random() * 30)}` })),
+    }))
+    const maxPerHost = pick([0, 1, 2, 2, 3])
+    const maxResults = pick([undefined, 1, 4, 8, 16, 24])
+    const options = { pattern: lanes.map((lane) => lane.name), maxResults, maxPerHost }
+    const distinct = new Set(lanes.flatMap((lane) => lane.sources).map((source) => normalizeUrl(source.url))).size
+    const expectedLength = maxResults === undefined ? distinct : Math.min(maxResults, distinct)
+    const merged = mergeLanes(lanes, options)
+    const context = `seeded iteration ${iteration}: ${laneCount} lanes, ${hostCount} hosts, maxPerHost=${maxPerHost}, maxResults=${maxResults}`
+    assert.equal(merged.sources.length, expectedLength, context)
+    assert.equal(merged.truncated, false, context)
+    assert.equal(new Set(merged.sources.map((source) => normalizeUrl(source.url))).size, merged.sources.length, `duplicate URL in the result: ${context}`)
+    assert.deepEqual(mergeLanes(lanes, options), merged, `not deterministic: ${context}`)
+    const counts = new Map()
+    for (const source of merged.sources) counts.set(hostOf(source), (counts.get(hostOf(source)) ?? 0) + 1)
+    const overCap = [...counts.values()].filter((count) => maxPerHost > 0 && count > maxPerHost).length
+    if (overCap > 0) {
+      // A host may exceed the cap only when capping every host could not have filled the result.
+      const perHost = new Map()
+      for (const url of new Set(lanes.flatMap((lane) => lane.sources).map((source) => normalizeUrl(source.url)))) {
+        const host = new URL(url).host
+        perHost.set(host, (perHost.get(host) ?? 0) + 1)
+      }
+      const capped = [...perHost.values()].reduce((total, size) => total + Math.min(maxPerHost, size), 0)
+      assert.ok(capped < expectedLength, `a host exceeds the cap although capping would have filled the result: ${context}`)
+      assert.ok(merged.capFill > 0, `capFill not reported: ${context}`)
+    } else {
+      assert.equal(merged.capFill, 0, `capFill reported without any host over the cap: ${context}`)
+    }
+  }
 })
 
 test('maxPerHost: 0 disables the per-host cap', () => {
@@ -634,7 +746,11 @@ test('the merged provider forwards host cap and social demotion through its opti
     'https://www.reddit.com/r/1',
     'https://www.youtube.com/watch?v=1',
     'https://github.com/o/r',
+    'https://news.example.org/a',
+    'https://blog.example.net/b',
+    'https://wiki.example.dev/c',
   ], undefined)))
+  // 10 distinct pages on 8 hosts, maxResults 8: the capped pass fills the result on its own.
   const base = mergedOptions({ deepseekFetch, serperFetch })
   const provider = new MergedSearchProvider(() => ({
     ...base,
@@ -655,12 +771,57 @@ test('a degraded single-backend result still honors the per-host cap', async () 
     'https://same.example/1',
     'https://same.example/2',
     'https://same.example/3',
-    'https://other.example/1',
+    'https://news.example.org/a',
+    'https://blog.example.net/b',
+    'https://wiki.example.dev/c',
+    'https://docs.example.org/d',
+    'https://forum.example.com/e',
+    'https://hub.example.io/f',
   ])))
   const provider = new MergedSearchProvider(() => mergedOptions({ deepseekFetch, serperFetch }))
   const result = await provider.search({ query: 'degraded host cap', maxResults: 8 }, new AbortController().signal)
   const sameHost = result.sources.filter((source) => new URL(source.url).hostname === 'same.example')
   assert.ok(sameHost.length <= 2, `expected at most 2 same-host sources, got ${sameHost.length}`)
+  assert.equal(result.sources.length, 8)
+})
+
+test('a degraded single-backend result the cap would cut short is returned in full', async () => {
+  const deepseekFetch = stubFetch(() => jsonResponse({ error: { message: 'boom' } }, 500))
+  const serperFetch = stubFetch(() => jsonResponse(serperPayload([
+    'https://same.example/1',
+    'https://same.example/2',
+    'https://same.example/3',
+    'https://other.example/1',
+  ])))
+  const lines = []
+  const logger = { info: (line) => lines.push(String(line)), warn: (line) => lines.push(String(line)) }
+  const provider = new MergedSearchProvider(() => ({ ...mergedOptions({ deepseekFetch, serperFetch }), logLevel: 'info' }), logger)
+  const result = await provider.search({ query: 'degraded short pool', maxResults: 8 }, new AbortController().signal)
+  // Only 4 distinct pages exist: the cap used to hand back 3 of them.
+  assert.equal(result.sources.length, 4)
+  assert.equal('capFill' in result, false, 'capFill is a log detail, not part of the provider result')
+  assert.ok(lines.some((line) => line.includes('merged=4 capFill=1')), lines.join('\n'))
+})
+
+test('a search whose hits all sit on one site still returns every distinct page', async () => {
+  // The `site:docs.example.org …` shape: both lanes answer from one host (20 distinct pages).
+  const onSite = (section) => Array.from({ length: 10 }, (_, index) => `https://docs.example.org/${section}/${index}`)
+  const lines = []
+  const logger = { info: (line) => lines.push(String(line)), warn: (line) => lines.push(String(line)) }
+  const provider = new MergedSearchProvider(() => ({
+    ...mergedOptions({
+      deepseekFetch: stubFetch(() => jsonResponse(deepseekPayload(onSite('guide')))),
+      serperFetch: stubFetch(() => jsonResponse(serperPayload(onSite('tutorial'), undefined))),
+    }),
+    logLevel: 'info',
+  }), logger)
+  const result = await provider.search({ query: 'site:docs.example.org asyncio', maxResults: 24 }, new AbortController().signal)
+  // 2 (the old result) becomes 20: the pool has no more distinct pages.
+  assert.equal(result.sources.length, 20)
+  assert.equal(new Set(result.sources.map((source) => normalizeUrl(source.url))).size, 20)
+  assert.ok(result.sources.every((source) => new URL(source.url).hostname === 'docs.example.org'))
+  assert.equal('capFill' in result, false)
+  assert.ok(lines.some((line) => line.includes('merged=20 capFill=18')), lines.join('\n'))
 })
 
 // ── v0.4.0 packaging / selection regression guards ─────────────────────────
@@ -763,16 +924,18 @@ test("a candidate blocked by maxPerHost does not consume its lane's interleave s
   // After P's first take the per-host cap (1) blocks every further a.example item.
   // S's turn used to go empty because its head was dropped, so a 1:1 pattern
   // skewed towards P; S now fills its turn with its next eligible candidate.
+  // The blocked pages come back only through the fill pass, after the capped head.
   const lane = (urls) => urls.map((url) => ({ url }))
   const tag = (source) => `${new URL(source.url).hostname[0]}${source.url.at(-1)}`
-  const { sources } = mergeLanes(
+  const first = mergeLanes(
     [
       { name: 'P', sources: lane(['https://a.example/1', 'https://a.example/2', 'https://b.example/1', 'https://b.example/2']) },
       { name: 'S', sources: lane(['https://a.example/3', 'https://a.example/4', 'https://c.example/1', 'https://c.example/2']) },
     ],
     { pattern: ['P', 'S'], maxResults: 4, maxPerHost: 1 },
   )
-  assert.deepEqual(sources.map(tag), ['a1', 'c1', 'b1'])
+  assert.deepEqual(first.sources.map(tag), ['a1', 'c1', 'b1', 'a2'])
+  assert.equal(first.capFill, 1)
   // A lane with nothing eligible left still hands its slot to the next lane.
   const wide = mergeLanes(
     [
@@ -781,7 +944,7 @@ test("a candidate blocked by maxPerHost does not consume its lane's interleave s
     ],
     { pattern: ['P', 'S'], maxResults: 4, maxPerHost: 1 },
   )
-  assert.deepEqual(wide.sources.map(tag), ['a1', 'c1', 'd1'])
+  assert.deepEqual(wide.sources.map(tag), ['a1', 'c1', 'd1', 'a2'])
 })
 
 test('the DeepSeek lane sends a query the Search API accepts: no site: operator, no quote marks', async () => {
